@@ -54,3 +54,15 @@ variable "existing_github_oidc_provider_arn" {
   type        = string
   default     = ""
 }
+
+variable "github_org_id" {
+  description = "Numeric GitHub id of the org; GitHub puts it in the OIDC subject."
+  type        = string
+  default     = "353076408"
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub id of the platform repo; GitHub puts it in the OIDC subject."
+  type        = string
+  default     = "1447518048"
+}

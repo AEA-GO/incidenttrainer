@@ -1,0 +1,70 @@
+# CI for every pull request and every push to main.
+#   checks      : pre-commit on all files (format, ruff, terraform fmt, ...), same tool versions as laptops (mise.toml)
+#   secrets     : gitleaks over the whole git history
+#   aws-sign-in : proves GitHub can sign in to AWS with OIDC (read-only plan role); skipped for PRs from forks
+# Later: terraform plan (PR) and apply (main, environment "main") jobs, once infra/envs/main exists.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pinned tools from mise.toml (node, terraform, uv)
+        uses: jdx/mise-action@v4
+
+      - name: pre-commit on all files
+        run: uvx pre-commit run --all-files --show-diff-on-failure
+        env:
+          # The pre-commit gitleaks hook only scans staged changes; the secrets job scans everything.
+          SKIP: gitleaks
+
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history, so old commits are scanned too
+
+      - name: gitleaks over the whole history
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+            git /repo --redact --verbose --no-banner
+
+  aws-sign-in:
+    name: aws-sign-in
+    # Forks get no OIDC token; only run for branches of this repo and pushes to main.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write # lets the job ask GitHub for an OIDC token
+    steps:
+      - name: Sign in to AWS with the read-only plan role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Who am I in AWS
+        run: aws sts get-caller-identity

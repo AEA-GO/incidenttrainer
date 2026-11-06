@@ -10,8 +10,9 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 locals {
-  account_id        = data.aws_caller_identity.current.account_id
-  repo              = "${var.github_org}/${var.github_repo}"
+  account_id = data.aws_caller_identity.current.account_id
+  # GitHub's OIDC subject includes immutable ids: repo:OWNER@ID/REPO@ID:...
+  repo              = "${var.github_org}@${var.github_org_id}/${var.github_repo}@${var.github_repo_id}"
   oidc_provider_arn = var.existing_github_oidc_provider_arn != "" ? var.existing_github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
 
   ci_roles = {
