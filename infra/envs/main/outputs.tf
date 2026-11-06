@@ -7,3 +7,16 @@ output "network" {
     instance_connect_endpoint_id = module.network.instance_connect_endpoint_id
   }
 }
+
+# Read by the deploy-web CI job.
+output "website_bucket" {
+  value = module.website.bucket
+}
+
+output "website_distribution_id" {
+  value = module.website.distribution_id
+}
+
+output "website_url" {
+  value = module.website.url
+}

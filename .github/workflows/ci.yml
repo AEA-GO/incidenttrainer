@@ -4,6 +4,7 @@
 #   aws-sign-in     : proves GitHub can sign in to AWS with OIDC (read-only plan role)
 #   terraform-plan  : PRs only: plans infra/envs/main with the read-only role and posts the plan on the PR
 #   terraform-apply : pushes to main only: applies infra/envs/main with the apply role, in the GitHub environment "main"
+#   deploy-web      : pushes to main only, after terraform-apply: builds web/ (or the placeholder page) and uploads it
 # Jobs that need AWS are skipped for PRs from forks (they get no OIDC token).
 # infra/bootstrap is never applied by CI: the lead applies it by hand.
 name: CI
@@ -165,3 +166,63 @@ jobs:
 
       - name: terraform apply
         run: terraform apply -input=false -no-color -auto-approve -lock-timeout=5m
+
+  deploy-web:
+    name: deploy-web
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [terraform-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: main
+    concurrency:
+      group: deploy-web-main
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned tools from mise.toml
+        uses: jdx/mise-action@v5
+
+      - name: Build the website
+        id: build
+        run: |
+          if [ -f web/package.json ]; then
+            (cd web && npm ci && npm run build)
+            echo "dir=web/dist" >> "$GITHUB_OUTPUT"
+          else
+            echo "No web/ app yet: deploying the placeholder page."
+            echo "dir=.github/placeholder-site" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign in to AWS with the apply role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read the bucket and distribution from Terraform
+        id: tf
+        working-directory: infra/envs/main
+        run: |
+          terraform init -input=false -no-color > /dev/null
+          echo "bucket=$(terraform output -raw website_bucket)" >> "$GITHUB_OUTPUT"
+          echo "distribution=$(terraform output -raw website_distribution_id)" >> "$GITHUB_OUTPUT"
+          echo "url=$(terraform output -raw website_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload and refresh CloudFront
+        env:
+          DIR: ${{ steps.build.outputs.dir }}
+          BUCKET: ${{ steps.tf.outputs.bucket }}
+          DISTRIBUTION: ${{ steps.tf.outputs.distribution }}
+          URL: ${{ steps.tf.outputs.url }}
+        run: |
+          # Hashed assets can be cached for a year; index.html must always be re-checked.
+          aws s3 sync "$DIR" "s3://$BUCKET" --delete --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp "$DIR/index.html" "s3://$BUCKET/index.html" --cache-control "no-cache"
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths "/*" \
+            --query Invalidation.Id --output text
+          echo "Deployed: $URL" >> "$GITHUB_STEP_SUMMARY"
