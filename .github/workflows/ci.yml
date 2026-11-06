@@ -1,8 +1,11 @@
 # CI for every pull request and every push to main.
-#   checks      : pre-commit on all files (format, ruff, terraform fmt, ...), same tool versions as laptops (mise.toml)
-#   secrets     : gitleaks over the whole git history
-#   aws-sign-in : proves GitHub can sign in to AWS with OIDC (read-only plan role); skipped for PRs from forks
-# Later: terraform plan (PR) and apply (main, environment "main") jobs, once infra/envs/main exists.
+#   checks          : pre-commit on all files (format, ruff, terraform fmt, ...), same tool versions as laptops (mise.toml)
+#   secrets         : gitleaks over the whole git history
+#   aws-sign-in     : proves GitHub can sign in to AWS with OIDC (read-only plan role)
+#   terraform-plan  : PRs only: plans infra/envs/main with the read-only role and posts the plan on the PR
+#   terraform-apply : pushes to main only: applies infra/envs/main with the apply role, in the GitHub environment "main"
+# Jobs that need AWS are skipped for PRs from forks (they get no OIDC token).
+# infra/bootstrap is never applied by CI: the lead applies it by hand.
 name: CI
 
 on:
@@ -17,13 +20,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+
+defaults:
+  run:
+    shell: bash # -eo pipefail
+
 jobs:
   checks:
     name: checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v7
 
@@ -52,7 +60,6 @@ jobs:
 
   aws-sign-in:
     name: aws-sign-in
-    # Forks get no OIDC token; only run for branches of this repo and pushes to main.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -68,3 +75,93 @@ jobs:
 
       - name: Who am I in AWS
         run: aws sts get-caller-identity
+
+  terraform-plan:
+    name: terraform-plan
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write # to post the plan as a PR comment
+    defaults:
+      run:
+        working-directory: infra/envs/main
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned tools from mise.toml
+        uses: jdx/mise-action@v5
+
+      - name: Sign in to AWS with the read-only plan role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init and plan
+        id: plan
+        run: |
+          {
+            terraform init -input=false -no-color
+            terraform plan -input=false -no-color -lock-timeout=2m -out=tfplan
+          } 2>&1 | tee plan.txt
+
+      - name: Post the plan on the PR
+        if: always() && steps.plan.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          OUTCOME: ${{ steps.plan.outcome }}
+        run: |
+          touch plan.txt
+          summary=$(grep -E '^(Plan:|No changes\.|Error:)' plan.txt | head -n 3 || true)
+          {
+            echo "### Terraform plan for \`infra/envs/main\`: ${OUTCOME}"
+            echo
+            echo "${summary:-No summary line found; open the full plan.}"
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+            echo "</details>"
+          } > comment.md
+          gh pr comment "$PR" --body-file comment.md --edit-last --create-if-none \
+            || gh pr comment "$PR" --body-file comment.md
+
+  terraform-apply:
+    name: terraform-apply
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [checks, secrets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: main # the apply role trusts only jobs in this environment
+    concurrency:
+      group: terraform-apply-main
+      cancel-in-progress: false # never stop an apply halfway
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: infra/envs/main
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned tools from mise.toml
+        uses: jdx/mise-action@v5
+
+      - name: Sign in to AWS with the apply role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init
+        run: terraform init -input=false -no-color
+
+      - name: terraform apply
+        run: terraform apply -input=false -no-color -auto-approve -lock-timeout=5m

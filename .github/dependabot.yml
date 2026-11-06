@@ -10,6 +10,11 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: terraform
-    directory: /infra/bootstrap
+    directories:
+      - /infra/bootstrap
+      - /infra/envs/main
     schedule:
       interval: monthly
+    groups:
+      terraform:
+        patterns: ["*"]
