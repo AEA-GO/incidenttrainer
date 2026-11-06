@@ -1,0 +1,27 @@
+[project]
+name = "itr-api"
+version = "0.1.0"
+description = "IncidentTrainer session API (FastAPI on AWS Lambda behind /api/*)"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "mangum>=0.19",
+]
+
+[dependency-groups]
+# boto3 is already in the Lambda runtime, so it is only a dev dependency here.
+dev = [
+    "boto3>=1.35",
+    "httpx>=0.27",
+    "pytest>=8.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/itr_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

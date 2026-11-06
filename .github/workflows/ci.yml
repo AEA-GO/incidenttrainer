@@ -1,10 +1,12 @@
 # CI for every pull request and every push to main.
-#   checks          : pre-commit on all files (format, ruff, terraform fmt, ...), same tool versions as laptops (mise.toml)
+#   checks          : pre-commit on all files (format, ruff, terraform fmt, ...), same tool versions as laptops (mise.toml),
+#                     then the API's tests
 #   secrets         : gitleaks over the whole git history
 #   aws-sign-in     : proves GitHub can sign in to AWS with OIDC (read-only plan role)
 #   terraform-plan  : PRs only: plans infra/envs/main with the read-only role and posts the plan on the PR
 #   terraform-apply : pushes to main only: applies infra/envs/main with the apply role, in the GitHub environment "main"
 #   deploy-web      : pushes to main only, after terraform-apply: builds web/ (or the placeholder page) and uploads it
+#   deploy-api      : pushes to main only, after terraform-apply: packages api/ for Lambda (arm64), deploys, smoke-tests
 # Jobs that need AWS are skipped for PRs from forks (they get no OIDC token).
 # infra/bootstrap is never applied by CI: the lead applies it by hand.
 name: CI
@@ -44,6 +46,11 @@ jobs:
         env:
           # The pre-commit gitleaks hook only scans staged changes; the secrets job scans everything.
           SKIP: gitleaks
+
+      - name: API tests
+        if: hashFiles('api/pyproject.toml') != ''
+        working-directory: api
+        run: uv run --frozen pytest -q
 
   secrets:
     name: secrets
@@ -226,3 +233,70 @@ jobs:
           aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths "/*" \
             --query Invalidation.Id --output text
           echo "Deployed: $URL" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-api:
+    name: deploy-api
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [terraform-apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: main
+    concurrency:
+      group: deploy-api-main
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned tools from mise.toml
+        uses: jdx/mise-action@v5
+
+      - name: Package api/ for Lambda (Python 3.13, arm64)
+        run: |
+          mkdir -p build/pkg
+          (cd api && uv export --frozen --no-dev --no-hashes --no-emit-project -o ../build/requirements.txt)
+          uv pip install --target build/pkg --python-platform aarch64-manylinux2014 \
+            --python-version 3.13 --only-binary :all: -r build/requirements.txt
+          cp -r api/src/itr_api build/pkg/
+          echo "${GITHUB_SHA::7}" > build/pkg/itr_api/VERSION
+          (cd build/pkg && zip -qr ../api.zip . -x '*/__pycache__/*')
+          ls -lh build/api.zip
+
+      - name: Sign in to AWS with the apply role
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read the function name and site URL from Terraform
+        id: tf
+        working-directory: infra/envs/main
+        run: |
+          terraform init -input=false -no-color > /dev/null
+          echo "function=$(terraform output -raw api_function_name)" >> "$GITHUB_OUTPUT"
+          echo "url=$(terraform output -raw website_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy the code
+        env:
+          FUNCTION: ${{ steps.tf.outputs.function }}
+        run: |
+          aws lambda update-function-code --function-name "$FUNCTION" \
+            --zip-file fileb://build/api.zip --query LastUpdateStatus --output text
+          aws lambda wait function-updated-v2 --function-name "$FUNCTION"
+
+      - name: Smoke test through CloudFront
+        env:
+          URL: ${{ steps.tf.outputs.url }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if body=$(curl -fsS "$URL/api/health"); then
+              echo "$body"
+              echo "API: $URL/api/health → $body" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$URL/api/health did not answer"
+          exit 1

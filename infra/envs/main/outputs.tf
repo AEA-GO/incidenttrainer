@@ -8,7 +8,11 @@ output "network" {
   }
 }
 
-# Read by the deploy-web CI job.
+output "table_name" {
+  value = module.data.table_name
+}
+
+# Read by the deploy-web and deploy-api CI jobs.
 output "website_bucket" {
   value = module.website.bucket
 }
@@ -19,4 +23,8 @@ output "website_distribution_id" {
 
 output "website_url" {
   value = module.website.url
+}
+
+output "api_function_name" {
+  value = module.api.function_name
 }

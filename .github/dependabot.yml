@@ -18,3 +18,11 @@ updates:
     groups:
       terraform:
         patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /api
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
