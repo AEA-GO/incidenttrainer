@@ -5,7 +5,8 @@
 # - The bucket is never public: only this distribution may read it (bucket policy + OAC).
 # - A CloudFront Function sends app routes like /labs/3am to /index.html (single-page app),
 #   only on the website behaviour, so future /api/* errors are not rewritten.
-# - Later the same distribution gets /api/* (API Gateway) and /s/* (gateway, VPC origin).
+# - /api/* goes to the session API (API Gateway → Lambda), never cached.
+# - Later /s/* goes to the gateway (VPC origin).
 #
 # Cost: ~$0. CloudFront's always-free tier covers 1 TB out and 10M requests a month;
 # S3 storage for a small site is cents.
@@ -18,6 +19,16 @@ data "aws_cloudfront_cache_policy" "optimized" {
 
 data "aws_cloudfront_response_headers_policy" "security" {
   name = "Managed-SecurityHeadersPolicy"
+}
+
+data "aws_cloudfront_cache_policy" "disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+# Forwards everything the API needs (query strings, cookies, most headers) except Host,
+# which must stay API Gateway's own hostname.
+data "aws_cloudfront_origin_request_policy" "all_except_host" {
+  name = "Managed-AllViewerExceptHostHeader"
 }
 
 # --- Bucket ----------------------------------------------------------------------
@@ -81,6 +92,30 @@ resource "aws_cloudfront_distribution" "site" {
     origin_id                = "web"
     domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
     origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+  }
+
+  origin {
+    origin_id   = "api"
+    domain_name = var.api_origin_domain
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "https-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  ordered_cache_behavior {
+    path_pattern               = "/api/*"
+    target_origin_id           = "api"
+    viewer_protocol_policy     = "https-only"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = data.aws_cloudfront_cache_policy.disabled.id
+    origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.all_except_host.id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security.id
   }
 
   default_cache_behavior {
