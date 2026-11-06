@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (ignored by Git: the repo is public) and fill in.
+alert_email        = "you@example.com"
+telegram_chat_id   = "-100XXXXXXXXXX"
+telegram_thread_id = "NN"
+
+# This account already has a Cost Anomaly Detection monitor:
+# Billing → Cost Anomaly Detection → Cost monitors → copy its ARN.
+existing_anomaly_monitor_arn = "arn:aws:ce::557541683274:anomalymonitor/..."
+
+# Only if `aws iam list-open-id-connect-providers` already shows token.actions.githubusercontent.com:
+# existing_github_oidc_provider_arn = "arn:aws:iam::557541683274:oidc-provider/token.actions.githubusercontent.com"
