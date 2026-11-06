@@ -1,0 +1,8 @@
+# Tool versions for everyone working on this repo.
+# After a change here, run `mise install`.
+# Python comes from uv (.python-version). Docker and the AWS CLI are
+# installed separately: see docs/setup.md.
+[tools]
+node = "24.22.2"
+terraform = "1.17.1"
+uv = "0.13.7"
