@@ -1,0 +1,399 @@
+openapi: 3.1.0
+info:
+  title: IncidentTrainer session API
+  version: 0.1.0
+  description: |
+    Contract 3: between the website and the API (FastAPI on Lambda), served under `/api` on our one domain.
+    Draft v0.1. Changes freely until v1; after v1, only through an ADR.
+
+    - Who the player is: the invite code, sent in the `X-Invite-Code` header (never in the URL).
+      This works whether the website remembers the code or the player types it each time.
+    - Game ids are random and unguessable; endpoints about a game still require the code that started it.
+    - The API never talks to game servers. Gameplay (`/s/<game_id>/...`) goes through the gateway (contracts 2 and 5).
+    - Runbooks are never sent to the browser. The debrief is sent only after the game has ended.
+    - Data model: data-model.md. Event and state names: events.md, game-states.md. Score: score.md.
+servers:
+  - url: /api
+security:
+  - inviteCode: []
+
+paths:
+  /health:
+    get:
+      summary: Is the API up and can it reach the database?
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version, db]
+                properties:
+                  status: { type: string, const: ok }
+                  version: { type: string, description: Short commit id }
+                  db: { type: string, enum: [ok, error] }
+
+  /invite:
+    get:
+      summary: Check an invite code
+      responses:
+        "200":
+          description: The code is valid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invite" }
+        "401": { $ref: "#/components/responses/BadCode" }
+        "403": { $ref: "#/components/responses/CodeDisabled" }
+
+  /course:
+    get:
+      summary: The course and its lab cards
+      description: Works without a code. With a valid code, each lab also shows whether it is done, and `invite` is filled in.
+      security:
+        - {}
+        - inviteCode: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Course" }
+
+  /labs/{lab_id}:
+    get:
+      summary: One lab card
+      security:
+        - {}
+        - inviteCode: []
+      parameters:
+        - $ref: "#/components/parameters/LabId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LabCard" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /sessions:
+    post:
+      summary: Start shift
+      description: |
+        Checks the code, the per-day limit, the 5-server cap and the monthly game cap (one transaction),
+        then starts a game server. On success it sets the game cookie (format in contract 5):
+        `itr_game=<value>; Path=/s/<game_id>/; HttpOnly; Secure; SameSite=Strict; Max-Age=2700`.
+        If the server fails to start, the game is given back to the code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lab_id, nickname]
+              additionalProperties: false
+              properties:
+                lab_id: { type: string, examples: [lab1] }
+                nickname: { $ref: "#/components/schemas/Nickname" }
+      responses:
+        "201":
+          description: Game created, server booting
+          headers:
+            Set-Cookie:
+              description: The game cookie (contract 5)
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [game_id, state, game_path, expires_at]
+                properties:
+                  game_id: { $ref: "#/components/schemas/GameId" }
+                  state: { type: string, const: booting }
+                  game_path: { type: string, examples: ["/s/q3V9xYk2Lm8Ta1BcD4eF0g/"] }
+                  expires_at: { type: string, format: date-time, description: Server lifetime limit (45 min) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BadCode" }
+        "403": { $ref: "#/components/responses/CodeDisabled" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429":
+          description: "`out_of_games` (no games left on the code) or `daily_limit` (3 today; Retry-After says until midnight Kyiv time)"
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: "`all_servers_busy` (Retry-After about 10 min), `budget_exhausted` (monthly cap reached) or `start_failed`"
+          headers:
+            Retry-After: { schema: { type: integer } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /sessions/{game_id}:
+    get:
+      summary: Game status (boot screen, and whether the game has ended)
+      parameters:
+        - $ref: "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GameStatus" }
+        "401": { $ref: "#/components/responses/BadCode" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /sessions/{game_id}/finish:
+    post:
+      summary: Score an ended game and delete its server
+      description: |
+        Called by the website once the game state is `ended`. Safe to call more than once: later calls return the same result.
+        The cleanup Lambda runs the same code for games whose browser has gone.
+      parameters:
+        - $ref: "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: "Scored (or `scored: false` for games that can't be scored)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScoreResult" }
+        "401": { $ref: "#/components/responses/BadCode" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_ended`: the game is still running"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /results/{game_id}:
+    get:
+      summary: Everything for the results page
+      description: Only for ended and scored games. Needs the code that started the game, because it contains the debrief.
+      parameters:
+        - $ref: "#/components/parameters/GameId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Results" }
+        "401": { $ref: "#/components/responses/BadCode" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_ended` or `not_scored_yet`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /sessions/{game_id}/feedback:
+    put:
+      summary: Save (or replace) the 3-question feedback
+      parameters:
+        - $ref: "#/components/parameters/GameId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Feedback" }
+      responses:
+        "204": { description: Saved }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/BadCode" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`not_ended`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /waitlist:
+    post:
+      summary: Join the waitlist
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, consent, consent_text_version]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                consent: { type: boolean, const: true }
+                consent_text_version: { type: string, examples: ["2026-11-v1"] }
+      responses:
+        "204": { description: Saved (also when the email was already on the list) }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+components:
+  securitySchemes:
+    inviteCode:
+      type: apiKey
+      in: header
+      name: X-Invite-Code
+      description: The invite code, with or without the dash, any letter case.
+
+  parameters:
+    LabId:
+      name: lab_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z0-9-]{1,40}$" }
+    GameId:
+      name: game_id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/GameId" }
+
+  responses:
+    BadRequest:
+      description: "`bad_request`: the body or a parameter is invalid"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadCode:
+      description: "`bad_code`: missing or unknown code, or not the code that started this game"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    CodeDisabled:
+      description: "`code_disabled`: we switched this code off"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: "`not_found`: no such lab or game"
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    GameId:
+      type: string
+      pattern: "^[A-Za-z0-9_-]{22}$"
+
+    Nickname:
+      type: string
+      minLength: 2
+      maxLength: 24
+      description: Letters (any language), digits, spaces and _ . - only. Checked by the API.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, bad_code, code_disabled, not_found, out_of_games, daily_limit, all_servers_busy, budget_exhausted, start_failed, not_ended, not_scored_yet, internal]
+            message: { type: string, description: Plain words, safe to show to the player }
+            retry_after_s: { type: integer }
+
+    Invite:
+      type: object
+      required: [games_total, games_left, games_left_today]
+      properties:
+        games_total: { type: integer, examples: [6] }
+        games_left: { type: integer, examples: [5] }
+        games_left_today: { type: integer, examples: [2] }
+
+    Course:
+      type: object
+      required: [id, title, summary, labs]
+      properties:
+        id: { type: string, examples: [on-call-basics] }
+        title: { type: string, examples: [On-call basics] }
+        summary: { type: string }
+        invite:
+          description: Present only when a valid code was sent
+          $ref: "#/components/schemas/Invite"
+        labs:
+          type: array
+          items: { $ref: "#/components/schemas/LabCard" }
+
+    LabCard:
+      type: object
+      description: Public lab information only. Never contains anything from the runbook or debrief.
+      required: [id, order, title, hook, level, minutes, skills, tools, terminal]
+      properties:
+        id: { type: string, examples: [lab1] }
+        order: { type: integer, examples: [1] }
+        title: { type: string }
+        hook: { type: string }
+        level: { type: string, enum: [intern, junior] }
+        minutes: { type: integer, examples: [15] }
+        skills: { type: array, items: { type: string } }
+        tools: { type: array, items: { type: string } }
+        terminal: { type: boolean }
+        handover_note: { type: string, description: Shown on the boot screen }
+        done:
+          description: Present only when a valid code was sent. The best finished game for this lab, or null.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [game_id, score, grade]
+              properties:
+                game_id: { $ref: "#/components/schemas/GameId" }
+                score: { type: integer }
+                grade: { type: string, enum: [S, A, B, C, D] }
+
+    GameStatus:
+      type: object
+      required: [game_id, lab_id, state, boot]
+      properties:
+        game_id: { $ref: "#/components/schemas/GameId" }
+        lab_id: { type: string }
+        state: { type: string, enum: [booting, ready, paged, investigating, watching, ended] }
+        end_reason: { type: string, enum: [resolved, unresolved, gave_up, abandoned, failed] }
+        boot:
+          type: object
+          description: Progress for the boot screen
+          required: [server_started, agent_ready]
+          properties:
+            server_started: { type: boolean }
+            agent_ready: { type: boolean }
+            seconds_since_start: { type: integer }
+        scored: { type: boolean, description: True once finish has run }
+
+    ScoreResult:
+      description: The output of score() exactly as defined in score.md
+      type: object
+      required: [version, scored]
+      properties:
+        version: { type: string, examples: [score-v0.1] }
+        scored: { type: boolean }
+
+    Results:
+      type: object
+      required: [game_id, lab, nickname, end_reason, score, events, debrief]
+      properties:
+        game_id: { $ref: "#/components/schemas/GameId" }
+        lab: { $ref: "#/components/schemas/LabCard" }
+        nickname: { type: string }
+        end_reason: { type: string, enum: [resolved, unresolved, gave_up, abandoned] }
+        score: { $ref: "#/components/schemas/ScoreResult" }
+        events:
+          type: array
+          description: The game diary (events.md), for the player's timeline. Only events with a game time.
+          items: { type: object }
+        debrief:
+          type: object
+          description: From the lab's debrief file (contract 1). Only now does the browser receive it.
+        next_lab_id: { type: [string, "null"] }
+        feedback_given: { type: boolean }
+
+    Feedback:
+      type: object
+      required: [replay]
+      additionalProperties: false
+      properties:
+        replay: { type: integer, minimum: 1, maximum: 5, description: "Would you play another lab?" }
+        stuck: { type: string, maxLength: 1000, description: "Where did you get stuck or confused?" }
+        fake: { type: string, maxLength: 1000, description: "Did anything feel fake?" }
