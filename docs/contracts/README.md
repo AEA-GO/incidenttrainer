@@ -10,7 +10,7 @@ What sits behind a contract can change freely; a contract itself changes only th
 | 3 | Session API `/api/*` | website and API | `session-api.yaml` | planned |
 | 4 | Server launcher (start, stop, address) | API and EC2 | `launcher.md` | planned |
 | 5 | Game path `/s/<id>/*` and signed cookie | browser and gateway | `game-path.md` | planned |
-| 6 | `score(runbook, events) -> result` | event log and results | `score.schema.json` | planned |
+| 6 | `score(scoring, events) -> result` | event log and results | [score.md](score.md) | draft v0.1 |
 
 Shared by several contracts:
 
