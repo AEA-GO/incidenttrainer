@@ -42,12 +42,12 @@ Every state change is caused by an event from [events.md](events.md); the state 
 | `end_reason` | When | Scored as |
 | --- | --- | --- |
 | `resolved` | the watch passed | normal score |
-| `unresolved` | 40 minutes reached without a passed watch | no speed points; correctness only for checks passing at the end |
+| `unresolved` | 40 minutes reached without a passed watch | no speed or correctness points, except half when time ran out during a holding watch |
 | `gave_up` | player clicked Give up | like `unresolved` |
 | `abandoned` | no browser request for 5 minutes | like `unresolved`; not counted as "finished" in beta numbers |
 | `failed` | server did not start or agent not ready within 3 min | not scored; the game is given back to the invite code |
 
-(How each reason is scored is finalised in contract 6; this table is the intent.)
+(Exact scoring is in [score.md](score.md).)
 
 ## Allowed changes
 
