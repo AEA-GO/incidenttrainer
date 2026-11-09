@@ -12,7 +12,12 @@ What sits behind a contract can change freely; a contract itself changes only th
 | 5 | Game path `/s/<id>/*` and signed cookie | browser and gateway | `game-path.md` | planned |
 | 6 | `score(runbook, events) -> result` | event log and results | `score.schema.json` | planned |
 
-Shared by several contracts: the event list and game states (`events.md`, planned).
+Shared by several contracts:
+
+| Document | What | Status |
+| --- | --- | --- |
+| [events.md](events.md) | the game diary: every event type and its fields | draft v0.1 |
+| [game-states.md](game-states.md) | the stages of a game and who may change them | draft v0.1 |
 
 Rules:
 - Each file states its version (e.g. `v1.0`) at the top.
