@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:itr:contracts:lab-format:v1",
+  "title": "IncidentTrainer lab file (itr-lab/v1)",
+  "description": "Contract 1, draft v0.1. One YAML file per lab in the private labs repo. Extra rules that JSON Schema cannot express are listed in lab-format.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "id", "version", "world", "course", "card", "scoring", "health", "scene", "fault", "page", "chat", "actions", "checks", "debrief", "secrets"],
+  "properties": {
+    "format": { "const": "itr-lab/v1" },
+    "id": { "$ref": "#/$defs/slug" },
+    "version": { "type": "integer", "minimum": 1 },
+    "world": { "$ref": "#/$defs/slug" },
+    "course": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "order"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "order": { "type": "integer", "minimum": 1, "maximum": 999 }
+      }
+    },
+    "card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "hook", "level", "minutes", "skills", "tools", "handover_note"],
+      "properties": {
+        "title": { "type": "string", "minLength": 3, "maxLength": 60 },
+        "hook": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "level": { "enum": ["intern", "junior"] },
+        "minutes": { "type": "integer", "minimum": 5, "maximum": 40 },
+        "skills": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 3, "maxLength": 80 } },
+        "tools": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["grafana", "logs", "buttons", "terminal"] } },
+        "handover_note": { "type": "string", "minLength": 10, "maxLength": 800 }
+      }
+    },
+    "scoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_time_s"],
+      "properties": {
+        "target_time_s": { "$ref": "#/$defs/seconds" },
+        "speed_zero_s": { "$ref": "#/$defs/seconds", "default": 1800 },
+        "health_full": { "type": "integer", "minimum": 1, "maximum": 100, "default": 75 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "time_limit_s": { "type": "integer", "minimum": 300, "maximum": 2400, "default": 2400 }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget_failed_checkouts"],
+      "properties": {
+        "budget_failed_checkouts": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["starts_at", "recent_changes"],
+      "properties": {
+        "starts_at": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "weekday": { "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] },
+        "recent_changes": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ago_s", "service", "text", "by"],
+            "properties": {
+              "ago_s": { "type": "integer", "minimum": 1, "maximum": 604800 },
+              "service": { "$ref": "#/$defs/service" },
+              "text": { "type": "string", "minLength": 3, "maxLength": 120 },
+              "by": { "type": "string", "minLength": 2, "maxLength": 30 }
+            }
+          }
+        }
+      }
+    },
+    "setup": { "type": "array", "maxItems": 20, "items": { "$ref": "#/$defs/fault_step" } },
+    "fault": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/$defs/fault_step" } },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alert", "fallback_after_s", "title", "severity"],
+      "properties": {
+        "alert": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{2,63}$" },
+        "fallback_after_s": { "type": "integer", "minimum": 10, "maximum": 120 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "severity": { "const": "SEV2" }
+      }
+    },
+    "timeline": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "allOf": [
+          { "$ref": "#/$defs/fault_step" },
+          { "type": "object", "required": ["at"], "properties": { "at": { "$ref": "#/$defs/seconds" } } }
+        ]
+      }
+    },
+    "chat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["messages", "chase"],
+      "properties": {
+        "messages": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "$ref": "#/$defs/chat_message" } },
+        "chase": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["overdue", "silence"],
+          "properties": {
+            "overdue": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from", "text"],
+              "properties": { "from": { "$ref": "#/$defs/character" }, "text": { "$ref": "#/$defs/chat_text" } }
+            },
+            "silence": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from", "after_s", "text"],
+              "properties": {
+                "from": { "$ref": "#/$defs/character" },
+                "after_s": { "type": "integer", "minimum": 120, "maximum": 1800 },
+                "text": { "$ref": "#/$defs/chat_text" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": { "type": "array", "minItems": 1, "maxItems": 40, "items": { "$ref": "#/$defs/action" } },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["success", "watch"],
+      "properties": {
+        "success": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "$ref": "#/$defs/check" } },
+        "watch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["seconds"],
+          "properties": {
+            "seconds": { "type": "integer", "minimum": 30, "maximum": 600 },
+            "interval_s": { "type": "integer", "minimum": 5, "maximum": 60, "default": 10 },
+            "checks": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/slug" } }
+          }
+        },
+        "damage": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/check" } }
+      }
+    },
+    "hints": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "after_s": { "$ref": "#/$defs/seconds" },
+          "text": { "type": "string", "minLength": 5, "maxLength": 300 }
+        }
+      }
+    },
+    "debrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "what_happened", "root_cause", "expert", "in_real_life", "lessons"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 10, "maxLength": 400 },
+        "what_happened": { "type": "string", "minLength": 10, "maxLength": 4000 },
+        "root_cause": { "type": "string", "minLength": 5, "maxLength": 200 },
+        "expert": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["time_s", "timeline", "commands"],
+          "properties": {
+            "time_s": { "$ref": "#/$defs/seconds" },
+            "timeline": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["t", "text"],
+                "properties": { "t": { "$ref": "#/$defs/seconds" }, "text": { "type": "string", "minLength": 3, "maxLength": 200 } }
+              }
+            },
+            "commands": {
+              "type": "array",
+              "maxItems": 15,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["command", "why"],
+                "properties": { "command": { "type": "string", "minLength": 2, "maxLength": 300 }, "why": { "type": "string", "minLength": 3, "maxLength": 300 } }
+              }
+            }
+          }
+        },
+        "in_real_life": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string", "minLength": 10, "maxLength": 1500 },
+            "links": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["title", "url"],
+                "properties": { "title": { "type": "string", "minLength": 3, "maxLength": 120 }, "url": { "type": "string", "pattern": "^https://" } }
+              }
+            }
+          }
+        },
+        "lessons": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 5, "maxLength": 200 } }
+      }
+    },
+    "secrets": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 3, "maxLength": 80 } }
+  },
+
+  "$defs": {
+    "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "service": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}$" },
+    "seconds": { "type": "integer", "minimum": 0, "maximum": 2400 },
+    "character": { "enum": ["dana", "sam"] },
+    "chat_text": { "type": "string", "minLength": 2, "maxLength": 500 },
+    "env_key": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$" },
+    "env_value": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{0,64}$" },
+    "check_message": { "type": "string", "minLength": 5, "maxLength": 200 },
+
+    "fault_step": {
+      "type": "object",
+      "required": ["verb", "target"],
+      "properties": {
+        "verb": { "enum": ["set_config", "set_flag", "deploy", "fill_disk", "kill_process", "add_latency", "cpu_load"] },
+        "target": { "$ref": "#/$defs/service" },
+        "at": { "$ref": "#/$defs/seconds" },
+        "params": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "properties": { "verb": { "const": "set_config" }, "params": { "type": "object", "additionalProperties": false, "required": ["key", "value"], "properties": { "key": { "$ref": "#/$defs/env_key" }, "value": { "$ref": "#/$defs/env_value" } } } }, "required": ["params"] },
+        { "properties": { "verb": { "const": "set_flag" }, "params": { "type": "object", "additionalProperties": false, "required": ["flag", "value"], "properties": { "flag": { "$ref": "#/$defs/env_key" }, "value": { "enum": ["true", "false"] } } } }, "required": ["params"] },
+        { "properties": { "verb": { "const": "deploy" }, "params": { "type": "object", "additionalProperties": false, "required": ["version"], "properties": { "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" } } } }, "required": ["params"] },
+        { "properties": { "verb": { "const": "fill_disk" }, "params": { "type": "object", "additionalProperties": false, "required": ["path", "size_mb", "content"], "properties": { "path": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{1,200}$" }, "size_mb": { "type": "integer", "minimum": 1, "maximum": 8192 }, "content": { "enum": ["logs", "zeros"] } } } }, "required": ["params"] },
+        { "properties": { "verb": { "const": "kill_process" }, "params": { "type": "object", "additionalProperties": false, "properties": { "signal": { "enum": ["KILL", "TERM"], "default": "KILL" } } } } },
+        { "properties": { "verb": { "const": "add_latency" }, "params": { "type": "object", "additionalProperties": false, "required": ["delay_ms"], "properties": { "delay_ms": { "type": "integer", "minimum": 1, "maximum": 30000 }, "jitter_ms": { "type": "integer", "minimum": 0, "maximum": 10000, "default": 0 } } } }, "required": ["params"] },
+        { "properties": { "verb": { "const": "cpu_load" }, "params": { "type": "object", "additionalProperties": false, "required": ["percent", "duration_s"], "properties": { "percent": { "type": "integer", "minimum": 1, "maximum": 100 }, "duration_s": { "type": "integer", "minimum": 10, "maximum": 2400 } } } }, "required": ["params"] }
+      ]
+    },
+
+    "chat_message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "when", "text"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "from": { "$ref": "#/$defs/character" },
+        "when": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["at"],
+              "properties": { "at": { "$ref": "#/$defs/seconds" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["trigger"],
+              "properties": {
+                "trigger": { "enum": ["acknowledged", "first_status_update", "status_update", "action", "hint_used", "resolve_failed", "resolve_passed", "reopened"] },
+                "delay_s": { "type": "integer", "minimum": 0, "maximum": 600, "default": 0 },
+                "match": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "minProperties": 1,
+                  "properties": { "verb": { "type": "string" }, "target": { "$ref": "#/$defs/service" } }
+                }
+              }
+            }
+          ]
+        },
+        "text": { "$ref": "#/$defs/chat_text" },
+        "replies": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "tone", "text"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z]$" },
+              "tone": { "enum": ["honest", "overconfident", "deflecting"] },
+              "text": { "type": "string", "minLength": 2, "maxLength": 200 },
+              "reaction": { "$ref": "#/$defs/chat_text" }
+            }
+          },
+          "contains": { "type": "object", "properties": { "tone": { "const": "honest" } } }
+        }
+      }
+    },
+
+    "choices": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["choices"],
+      "properties": { "choices": { "type": "array", "minItems": 1, "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,64}$" } } }
+    },
+    "typed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pattern"],
+      "properties": { "pattern": { "type": "string", "minLength": 3, "maxLength": 200 } }
+    },
+    "input_field": { "oneOf": [ { "$ref": "#/$defs/choices" }, { "$ref": "#/$defs/typed" } ] },
+
+    "action": {
+      "type": "object",
+      "required": ["id", "verb", "target"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "verb": { "enum": ["restart", "rollback", "scale", "set_config", "set_flag", "clear_logs", "show_config", "show_status", "show_versions"] },
+        "target": { "$ref": "#/$defs/service" },
+        "label": { "type": "string", "minLength": 2, "maxLength": 30 },
+        "confirm": { "type": "string", "minLength": 5, "maxLength": 200 },
+        "risky": { "type": "boolean", "default": false },
+        "input": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "properties": { "verb": { "enum": ["restart", "rollback", "clear_logs", "show_config", "show_status", "show_versions"] } }, "not": { "required": ["input"] } },
+        { "properties": { "verb": { "const": "scale" }, "input": { "type": "object", "additionalProperties": false, "required": ["replicas"], "properties": { "replicas": { "$ref": "#/$defs/choices" } } } }, "required": ["input"] },
+        { "properties": { "verb": { "const": "set_config" }, "input": { "type": "object", "additionalProperties": false, "required": ["key", "value"], "properties": { "key": { "$ref": "#/$defs/choices" }, "value": { "$ref": "#/$defs/input_field" } } } }, "required": ["input"] },
+        { "properties": { "verb": { "const": "set_flag" }, "input": { "type": "object", "additionalProperties": false, "required": ["flag", "value"], "properties": { "flag": { "$ref": "#/$defs/choices" }, "value": { "$ref": "#/$defs/choices" } } } }, "required": ["input"] }
+      ]
+    },
+
+    "check": {
+      "type": "object",
+      "required": ["id", "verb", "params", "message"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "verb": { "enum": ["http_ok", "error_rate_below", "latency_p95_below", "disk_free_percent", "config_equals", "container_running", "no_restarts", "metric"] },
+        "params": { "type": "object" },
+        "message": { "$ref": "#/$defs/check_message" }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "properties": { "verb": { "const": "http_ok" }, "params": { "type": "object", "additionalProperties": false, "required": ["service", "path"], "properties": { "service": { "$ref": "#/$defs/service" }, "path": { "type": "string", "pattern": "^/[A-Za-z0-9._/?=&-]{0,200}$" }, "method": { "enum": ["GET", "POST"], "default": "GET" }, "expect_status": { "type": "integer", "minimum": 100, "maximum": 599, "default": 200 }, "attempts": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 } } } } },
+        { "properties": { "verb": { "const": "error_rate_below" }, "params": { "type": "object", "additionalProperties": false, "required": ["service", "max_percent", "window_s"], "properties": { "service": { "$ref": "#/$defs/service" }, "route": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{0,100}$" }, "max_percent": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }, "window_s": { "type": "integer", "minimum": 15, "maximum": 600 } } } } },
+        { "properties": { "verb": { "const": "latency_p95_below" }, "params": { "type": "object", "additionalProperties": false, "required": ["service", "max_ms", "window_s"], "properties": { "service": { "$ref": "#/$defs/service" }, "route": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{0,100}$" }, "max_ms": { "type": "integer", "minimum": 1, "maximum": 60000 }, "window_s": { "type": "integer", "minimum": 15, "maximum": 600 } } } } },
+        { "properties": { "verb": { "const": "disk_free_percent" }, "params": { "type": "object", "additionalProperties": false, "required": ["mount", "min_percent"], "properties": { "mount": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{0,100}$" }, "min_percent": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 } } } } },
+        { "properties": { "verb": { "const": "config_equals" }, "params": { "type": "object", "additionalProperties": false, "required": ["service", "key", "value"], "properties": { "service": { "$ref": "#/$defs/service" }, "key": { "$ref": "#/$defs/env_key" }, "value": { "$ref": "#/$defs/env_value" } } } } },
+        { "properties": { "verb": { "const": "container_running" }, "params": { "type": "object", "additionalProperties": false, "required": ["service"], "properties": { "service": { "$ref": "#/$defs/service" } } } } },
+        { "properties": { "verb": { "const": "no_restarts" }, "params": { "type": "object", "additionalProperties": false, "required": ["service", "window_s"], "properties": { "service": { "$ref": "#/$defs/service" }, "window_s": { "type": "integer", "minimum": 15, "maximum": 2400 } } } } },
+        { "properties": { "verb": { "const": "metric" }, "params": { "type": "object", "additionalProperties": false, "required": ["query", "op", "value"], "properties": { "query": { "type": "string", "minLength": 3, "maxLength": 500 }, "op": { "enum": ["lt", "le", "gt", "ge", "eq"] }, "value": { "type": "number" } } } } }
+      ]
+    }
+  }
+}

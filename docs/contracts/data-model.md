@@ -1,6 +1,6 @@
 # Data model (DynamoDB)
 
-Version: **v0.1 (draft)**. Changes freely until v1; after v1, only through an ADR.
+Version: **v0.2 (draft)**. Changes freely until v1; after v1, only through an ADR.
 
 One table, `itr-main`: string keys `pk` and `sk`, on-demand, TTL attribute `expires_at` (Unix seconds), point-in-time recovery, deletion protection.
 Used by the API, the gateway, the cleanup Lambda and our scripts. Event and state formats are in [events.md](events.md) and [game-states.md](game-states.md).
@@ -12,13 +12,14 @@ Used by the API, the gateway, the cleanup Lambda and our scripts. Event and stat
 | Invite code | `CODE#<code>` | `META` | `active` (bool), `games_total` (6), `games_used`, `note` (who got it; ours only), `created_at` | none (kept until we switch it off) |
 | Games played on a day | `CODE#<code>` | `DAY#<YYYY-MM-DD>` | `count` | 2 days |
 | A game on a code | `CODE#<code>` | `GAME#<started_at>#<game_id>` | `lab_id`, `state`, `end_reason`, `score`, `grade` | 30 days |
-| Game | `GAME#<game_id>` | `META` | `code`, `lab_id`, `lab_version`, `level`, `nickname`, `state`, `end_reason`, `instance_id`, `private_ip`, `created_at`, `ready_at`, `ended_at`, `last_seen_at`, `reopened` | 30 days |
+| Game | `GAME#<game_id>` | `META` | `code`, `lab_id`, `lab_version`, `world`, `terminal`, `scoring` (level + the card's scoring block), `nickname`, `state`, `end_reason`, `severity`, `reopened`, `instance_id`, `private_ip`, `expires_at_server`, `created_at`, `ready_at`, `ended_at`, `last_seen_at`, `control_token` (contract 5), `events_synced_seq` (last agent seq copied) | 30 days |
 | Event | `GAME#<game_id>` | `EV#<by>#<seq, 6 digits>` | the event (`at`, `t`, `type`, `data`) | 30 days |
 | Result | `GAME#<game_id>` | `RESULT` | the output of `score()` | 30 days |
 | Feedback | `GAME#<game_id>` | `FEEDBACK` | `replay` (1-5), `stuck`, `fake`, `at` | 30 days |
 | Active game | `ACTIVE` | `GAME#<game_id>` | `instance_id`, `private_ip`, `state` | 1 day (safety) |
 | Running servers | `COUNTER` | `RUNNING` | `count` | none |
 | Games this month | `COUNTER` | `MONTH#<YYYY-MM>` | `games` | none |
+| Cookie keys | `CONFIG` | `COOKIE_KEYS` | `current` (kid), `keys` (`{kid: {secret, created_at}}`); contract 5 | none |
 | Limits | `CONFIG` | `LIMITS` | `max_running` (5), `games_per_code` (6), `games_per_day` (3), `max_games_month` (e.g. 400 for $15), `boot_timeout_s` (180), `idle_timeout_s` (300) | none |
 | Waitlist | `WAITLIST` | `EMAIL#<lower-case email>` | `consent` (true), `consent_text_version`, `at` | none (deleted after the launch emails) |
 
@@ -39,6 +40,7 @@ Notes:
 | API, gateway | Everything about game g | Query `pk = GAME#g` |
 | API | Status of game g | GetItem `GAME#g / META` |
 | Gateway | Which server is game g on? | GetItem `GAME#g / META` (cached ~60 s) |
+| API, gateway | Cookie keys | GetItem `CONFIG / COOKIE_KEYS` (cached 5 min) |
 | Gateway | Which games should I watch? | Query `pk = ACTIVE` (at most 5 items) |
 | Gateway | Save the agent's events | BatchWriteItem `GAME#g / EV#...` (same key = overwrite, no duplicates) |
 | Cleanup | Which game owns this server? | EC2 tag `session` → GetItem `GAME#g / META` |

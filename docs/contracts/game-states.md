@@ -1,6 +1,6 @@
 # Game states
 
-Version: **v0.1 (draft)**. Changes freely until v1; after v1, only through an ADR.
+Version: **v0.2 (draft)**. Changes freely until v1; after v1, only through an ADR.
 
 A game is always in exactly one state. The state is stored on the game's `META` item in DynamoDB (`state`, plus `end_reason` once ended) and returned by the agent's `GET /state`.
 Every state change is caused by an event from [events.md](events.md); the state is never changed without writing that event.
@@ -53,7 +53,7 @@ Every state change is caused by an event from [events.md](events.md); the state 
 
 | From | To | Caused by event | Written by |
 | --- | --- | --- | --- |
-| `booting` | `ready` | `agent_ready` (then `fault_started`) | gateway |
+| `booting` | `ready` | `agent_ready` (then `fault_started`) | gateway (its background loop, or sooner when the boot screen polls; contract 5) |
 | `booting` | `ended` (failed) | `boot_failed` | API or cleanup |
 | `ready` | `paged` | `paged` | agent |
 | `paged` | `investigating` | `acknowledged` | agent |
@@ -63,7 +63,7 @@ Every state change is caused by an event from [events.md](events.md); the state 
 | `watching` | `ended` (resolved) | `watch_passed` | agent |
 | `ready`, `paged`, `investigating`, `watching` | `ended` (gave_up) | `gave_up` | agent |
 | `paged`, `investigating`, `watching` | `ended` (unresolved) | `time_limit` | agent |
-| `ready`, `paged`, `investigating`, `watching` | `ended` (abandoned) | `heartbeat_lost` | gateway |
+| `ready`, `paged`, `investigating`, `watching` | `ended` (abandoned) | `heartbeat_lost`, then `ended` | gateway detects it; the agent writes `ended` (the gateway only if the agent can't be reached) |
 | any not `ended` | `ended` (abandoned or unresolved) | cleanup finds the server gone or past 45 min | cleanup |
 
 Anything not in this table is refused (e.g. Resolve while `paged`, a second `ended`).
@@ -71,7 +71,7 @@ Anything not in this table is refused (e.g. Resolve while `paged`, a second `end
 ## Who owns the state
 
 - **API:** creates the game in `booting`; can end it as `failed`.
-- **Gateway:** moves `booting → ready`; ends it as `abandoned`; copies the agent's state into DynamoDB about every 10 s.
+- **Gateway:** moves `booting → ready`; detects idle players and asks the agent to end the game; copies the agent's state and events into DynamoDB about every 10 s; sets `ended` in DynamoDB only after the final events are saved.
 - **Agent:** owns every change during play (`ready` to `ended`). Its state is the truth while the server is alive.
 - **Cleanup:** last resort; ends any game whose server is gone or too old.
 

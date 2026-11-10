@@ -1,0 +1,158 @@
+# Example lab (contract 1). FICTIONAL: not a real lab, safe to be public.
+# Real labs live only in the private labs repo. The diaries in events.md and the
+# worked examples in score.md are games of this lab.
+format: itr-lab/v1
+id: example-lab
+version: 1
+world: example-shop
+course: {id: example-course, order: 1}
+
+card:
+  title: Tuesday afternoon errors
+  hook: "Tuesday, 14:20. About a third of checkouts fail."
+  level: intern
+  minutes: 15
+  skills:
+    - Reading a service dashboard
+    - Linking symptoms to recent changes
+    - Posting a first status update
+  tools: [grafana, logs, buttons]
+  handover_note: |
+    Quiet morning. Catalog had a planned change around lunch.
+    Payments provider had a short blip at 11:00, resolved by itself.
+    Nothing else open. Good luck.
+
+scoring:
+  target_time_s: 300
+
+health:
+  budget_failed_checkouts: 600
+
+scene:
+  starts_at: "14:20"
+  weekday: Tuesday
+  recent_changes:
+    - {ago_s: 1500, service: catalog, text: "feature flag SEARCH_V2 turned on", by: dana}
+    - {ago_s: 5400, service: payments, text: "timeout 3s -> 5s", by: ci}
+    - {ago_s: 86400, service: orders, text: "deploy 1.14.2 -> 1.15.0", by: ci}
+
+fault:
+  - verb: set_flag
+    target: catalog
+    params: {flag: SEARCH_V2, value: "true"}
+
+page:
+  alert: CheckoutErrorRateHigh
+  fallback_after_s: 90
+  title: "Checkout error rate {value}%"
+  severity: SEV2
+
+chat:
+  messages:
+    - id: sam-1
+      from: sam
+      when: {at: 60}
+      text: "Getting tickets: 'payment failed' at checkout. How bad is it?"
+      replies:
+        - id: a
+          tone: honest
+          text: "Investigating, about a third of checkouts fail. Next update by 14:35."
+          reaction: "Thanks, I'll tell customers we're on it."
+        - id: b
+          tone: overconfident
+          text: "Should be fixed in 5 minutes."
+          reaction: "Great, I'll say 5 minutes."
+        - id: c
+          tone: deflecting
+          text: "Not sure yet, looking into it."
+          reaction: "OK... what do I tell people meanwhile?"
+    - id: dana-1
+      from: dana
+      when: {trigger: acknowledged, delay_s: 120}
+      text: "Any ETA? Marketing email goes out at 15:00."
+      replies:
+        - {id: a, tone: honest, text: "No ETA yet. I'll update you by 14:35.", reaction: "OK, holding the email for now."}
+        - {id: b, tone: overconfident, text: "Should be fixed in 5 minutes.", reaction: "Perfect."}
+    - id: sam-restart
+      from: sam
+      when: {trigger: action, match: {verb: restart}, delay_s: 30}
+      text: "Customers still say checkout fails."
+  chase:
+    overdue: {from: dana, text: "You said {promised}. Any news?"}
+    silence: {from: sam, after_s: 600, text: "Customers keep asking. Anything I can tell them?"}
+
+actions:
+  - {id: show-catalog-config, verb: show_config, target: catalog}
+  - id: catalog-flags
+    verb: set_flag
+    target: catalog
+    label: Toggle flag
+    input:
+      flag: {choices: [SEARCH_V2, NEW_PRICING]}
+      value: {choices: ["true", "false"]}
+  - {id: restart-catalog, verb: restart, target: catalog}
+  - {id: rollback-catalog, verb: rollback, target: catalog}
+  - {id: restart-orders, verb: restart, target: orders, risky: true}
+  - {id: restart-storefront, verb: restart, target: storefront}
+  - id: scale-storefront
+    verb: scale
+    target: storefront
+    input:
+      replicas: {choices: ["1", "2", "3"]}
+  - id: restart-postgres
+    verb: restart
+    target: postgres
+    confirm: "Restarting the database drops every open connection. Continue?"
+    risky: true
+  - {id: show-status, verb: show_status, target: storefront}
+
+checks:
+  success:
+    - id: checkout-healthy
+      verb: error_rate_below
+      params: {service: storefront, route: /checkout, max_percent: 1, window_s: 120}
+      message: "Checkout error rate is {value}% over the last 2:00 (needs under {threshold}%)."
+    - id: storefront-up
+      verb: http_ok
+      params: {service: storefront, path: /health}
+      message: "The storefront health check is failing."
+  watch:
+    seconds: 240
+    interval_s: 10
+  damage:
+    - id: orders-kept
+      verb: metric
+      params: {query: "min_over_time(shop_orders_rows[1h]) / max_over_time(shop_orders_rows[1h])", op: ge, value: 0.99}
+      message: "Orders placed before the incident were lost."
+
+hints:
+  - {id: h1, text: "Which service started failing first?"}
+  - {id: h2, after_s: 300, text: "Look at what changed shortly before the errors began."}
+
+debrief:
+  summary: "A new search feature in catalog failed for some queries, and checkout failed with it."
+  what_happened: |
+    A feature flag turned on a new search path in catalog. For about a third of
+    products it threw an error, and storefront failed the whole checkout when
+    catalog failed. Restarting services didn't help, because the flag stayed on.
+  root_cause: "A feature flag enabled a broken code path in catalog."
+  expert:
+    time_s: 240
+    timeline:
+      - {t: 20, text: "Acknowledged the page."}
+      - {t: 60, text: "Shop overview: errors start in catalog, storefront follows."}
+      - {t: 120, text: "Posted a first status update with the next update time."}
+      - {t: 180, text: "Recent changes: a catalog flag flipped 25 minutes before."}
+      - {t: 240, text: "Turned the flag off, error rate fell, pressed Resolve."}
+    commands:
+      - {command: "docker compose logs --since 30m catalog", why: "See the first errors and when they began."}
+      - {command: "cat config/catalog.env", why: "Check which flags are on right now."}
+  in_real_life:
+    text: "Config and flag changes are one of the most common outage triggers. Turning the change off first and investigating later is usually the fastest fix."
+    links:
+      - {title: "Google SRE book: Managing incidents", url: "https://sre.google/sre-book/managing-incidents/"}
+  lessons:
+    - "Check recent changes early."
+    - "A restart doesn't fix a bad setting."
+
+secrets: [SEARCH_V2]
