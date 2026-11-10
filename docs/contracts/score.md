@@ -1,6 +1,6 @@
 # Contract 6: score
 
-Version: **v0.1 (draft)**. Changes freely until v1; after v1, only through an ADR.
+Version: **v0.2 (draft)**. Changes freely until v1; after v1, only through an ADR.
 
 ```
 score(scoring, events) -> result
@@ -11,27 +11,24 @@ It reads the game diary defined in [events.md](events.md) and the scoring part o
 
 ## Input
 
-**`scoring`** (from the runbook, contract 1):
+**`scoring`**: the lab card's `level` plus its `scoring` block (contract 1). The API copies both onto the game when it starts, so a game is always scored with the lab version it was played on.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `level` | `intern` \| `junior` | picks the weights below |
 | `target_time_s` | integer | resolving by this game time gives full speed points (the expert's time plus a margin) |
+| `speed_zero_s` | integer, optional | default 1800 (30 min): no speed points from here on |
+| `health_full` | integer, optional | default 75: keeping this % or more of the health bar gives full damage points |
 
 **`events`**: the full diary of one game, in order (see events.md). Unknown event types are ignored.
 
-Fixed values (the same for every lab in v0):
-
-| Name | Value |
-| --- | --- |
-| `speed_zero_s` | 1800 (30 min): no speed points from here on |
-| `health_full` | 75: keeping 75% or more of the health bar gives full damage points |
+Below, `1800` and `75` stand for `speed_zero_s` and `health_full`.
 
 ## Output
 
 ```json
 {
-  "version": "score-v0.1",
+  "version": "score-v0.2",
   "scored": true,
   "score": 98,
   "grade": "S",
@@ -53,7 +50,7 @@ Fixed values (the same for every lab in v0):
 - `got` values keep 1 decimal. `score` is the total rounded half up to a whole number, clamped to 0-100.
 - `lost` has **one line for every rule that lost points**, with a plain-words reason. This is what the results page shows as "a reason for every lost point".
 - `grade_caps` lists why a grade was limited (`reopened`, `hints_used`, `not_resolved`).
-- Games that can't be scored return `{"version": "score-v0.1", "scored": false, "why": "..."}` (see Not scored).
+- Games that can't be scored return `{"version": "score-v0.2", "scored": false, "why": "..."}` (see Not scored).
 
 ## Weights
 
@@ -96,8 +93,11 @@ Reasons: "The first fix didn't hold: the incident reopened." / "Time ran out dur
 ### Damage
 - **`damage.health`:** `weight × clamp(final_health / 75, 0, 1)`, where `final_health` is from `ended`.
   Reason: "N% of the health bar left. Full points at 75% or more."
-- **`damage.risky`:** −3 for each `action` with `risky: true`. The damage category can't go below 0.
+- **`damage.risky`:** −3 for each `action` with `risky: true`.
   Reason: "N risky action(s): <verb target>, ..."
+- **`damage.checks`:** −3 for each `damage_found` event (a damage check that failed at the end, e.g. data was lost).
+  Reason: the check's `message`, e.g. "Orders placed before the incident were lost."
+- The damage category can't go below 0.
 
 ### Communication
 
@@ -177,10 +177,9 @@ Total 2.1 → **2, D** (the reopen cap to B doesn't matter here).
 - Both worked examples above give exactly these numbers.
 - Same input twice → identical output.
 - Shuffling unknown event types into the diary changes nothing.
-- Edge cases: resolved after a reopen (half correctness, grade max B); time limit during the watch; abandoned with `ended.t = null`; no chat replies; a promise falling due after the end; 4 wrong Resolves (still −6); 90+ with a hint (grade A).
+- Edge cases: two `damage_found` events (−6, category not below 0); resolved after a reopen (half correctness, grade max B); time limit during the watch; abandoned with `ended.t = null`; no chat replies; a promise falling due after the end; 4 wrong Resolves (still −6); 90+ with a hint (grade A).
 
 ## Open
 
 - Whether ack and first-update rules should give partial points (linear) instead of all-or-nothing.
-- Per-lab overrides of `speed_zero_s` and `health_full`, if a lab needs them.
 - Watch length (4 min vs ~90 s) does not change this contract.

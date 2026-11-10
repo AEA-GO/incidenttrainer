@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
   title: IncidentTrainer session API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Contract 3: between the website and the API (FastAPI on Lambda), served under `/api` on our one domain.
-    Draft v0.1. Changes freely until v1; after v1, only through an ADR.
+    Draft v0.2. Changes freely until v1; after v1, only through an ADR.
 
     - Who the player is: the invite code, sent in the `X-Invite-Code` header (never in the URL).
       This works whether the website remembers the code or the player types it each time.
@@ -82,8 +82,9 @@ paths:
       summary: Start shift
       description: |
         Checks the code, the per-day limit, the 5-server cap and the monthly game cap (one transaction),
-        then starts a game server. On success it sets the game cookie (format in contract 5):
-        `itr_game=<value>; Path=/s/<game_id>/; HttpOnly; Secure; SameSite=Strict; Max-Age=2700`.
+        then starts a game server through the launcher (contract 4). On success it sets the game cookie (contract 5):
+        `__Secure-itr_game=v1.<game_id>.<exp>.<kid>.<sig>; Path=/s/<game_id>/; Max-Age=2700; Secure; HttpOnly; SameSite=Strict`.
+        It also copies the lab card's `level` and `scoring` onto the game, so the game is scored with the lab version it was played on.
         If the server fails to start, the game is given back to the code.
       requestBody:
         required: true
@@ -151,6 +152,8 @@ paths:
       summary: Score an ended game and delete its server
       description: |
         Called by the website once the game state is `ended`. Safe to call more than once: later calls return the same result.
+        For a few seconds after the agent ends a game, this still answers `409 not_ended`: the gateway marks the game ended
+        only after it has saved the final events (contract 5). Retry after `retry_after_s`.
         The cleanup Lambda runs the same code for games whose browser has gone.
       parameters:
         - $ref: "#/components/parameters/GameId"

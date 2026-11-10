@@ -1,0 +1,70 @@
+# Example world manifest (contract 1). Fictional; the real teapot-basic manifest lives in the labs repo.
+format: itr-world/v1
+name: example-shop
+version: 0.1.0
+
+compose:
+  dir: /opt/shop
+  project: shop
+  versions_file: .env
+  config_dir: config
+
+data_mount: /data
+logs_dir: /data/logs
+prometheus_url: http://127.0.0.1:9090
+
+grafana:
+  port: 3000
+  dashboards:
+    - {uid: shop-overview, title: Shop overview}
+    - {uid: host, title: Host}
+
+services:
+  - name: storefront
+    kind: app
+    url: http://127.0.0.1:8001
+    calls: [catalog, orders, payments]
+    versions: [1.4.0, 1.5.0]
+    scalable: true
+    map: {x: 10, y: 50}
+  - name: catalog
+    kind: app
+    url: http://127.0.0.1:8002
+    calls: [redis]
+    versions: [2.0.0, 2.1.0]
+    scalable: true
+    map: {x: 45, y: 20}
+  - name: orders
+    kind: app
+    url: http://127.0.0.1:8003
+    calls: [postgres]
+    versions: [1.14.2, 1.15.0]
+    map: {x: 45, y: 50}
+  - name: payments
+    kind: app
+    url: http://127.0.0.1:8004
+    versions: [3.2.0]
+    map: {x: 45, y: 80}
+  - name: postgres
+    kind: database
+    map: {x: 80, y: 50}
+  - name: redis
+    kind: cache
+    map: {x: 80, y: 20}
+
+alerts: [CheckoutErrorRateHigh, CheckoutLatencyHigh, DiskAlmostFull, ServiceDown]
+
+metrics:
+  error_rate: >-
+    100 * sum(rate(http_requests_total{service="$service",route=~"$route",status=~"5.."}[$window]))
+    / clamp_min(sum(rate(http_requests_total{service="$service",route=~"$route"}[$window])), 1e-9)
+  latency_p95: >-
+    1000 * histogram_quantile(0.95,
+    sum by (le) (rate(http_request_duration_seconds_bucket{service="$service",route=~"$route"}[$window])))
+  failed_checkouts_total: sum(shop_checkouts_total{result="failed"})
+
+status:
+  degraded_error_percent: 1
+  down_error_percent: 50
+  degraded_p95_ms: 1000
+  window_s: 30

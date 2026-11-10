@@ -1,0 +1,765 @@
+openapi: 3.1.0
+info:
+  title: IncidentTrainer agent API
+  version: 0.1.0
+  description: |
+    Contract 2: the agent (the referee) on every game server. Draft v0.1. Changes freely until v1; after v1, only through an ADR.
+
+    Two listeners:
+    - **Player API, port 8080, paths `/v1/*`.** Reached only through the gateway: the browser calls
+      `/s/<game_id>/api/v1/<path>`, the gateway strips `/s/<game_id>/api` and forwards to `http://<server>:8080/v1/<path>`
+      (contract 5). The gateway adds `X-Itr-Game-Id`; the agent answers `404 wrong_game` if it doesn't match the game it was claimed for.
+    - **Control API, port 8081, paths `/control/v1/*`.** Only gateway-auth calls it; the browser never can (the gateway has no route to 8081).
+      Protected by a per-game token set once by `claim`. There is deliberately **no endpoint that returns the runbook**.
+
+    Rules:
+    - Game time `t` is in seconds since the page (contract: events.md). Before the page it is `null`.
+    - Hidden until the game ends (never in player responses): reply tones, `risky` flags, `checks_passing`, check ids, fault details.
+    - Every change the player makes is written to the event log (events.md) before the response is sent.
+    - Player input is passed to commands as arguments, never pasted into a shell string.
+    - All bodies are JSON (`Content-Type: application/json` is required on requests with a body; this also blocks simple cross-site form posts).
+    - Errors use the same shape as the session API: `{"error": {"code", "message", "retry_after_s"?}}`; `message` is safe to show the player.
+    - Timeouts the gateway should allow: 35 s for `/v1/actions` and `/v1/resolve`, 10 s for everything else.
+
+    The game states and who may change them are in game-states.md. The lab and world formats are contract 1.
+
+tags:
+  - name: player
+    description: Port 8080, through the gateway
+  - name: control
+    description: Port 8081, gateway-auth only
+
+paths:
+  /v1/scene:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    get:
+      tags: [player]
+      summary: Things that don't change during the game (load once)
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/Scene" } } }
+        "404": { $ref: "#/components/responses/WrongGame" }
+        "409": { $ref: "#/components/responses/NotReady" }
+
+  /v1/state:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    get:
+      tags: [player]
+      summary: Current game state plus new feed items (the browser polls this every 1–2 s)
+      description: |
+        Cheap to call: health, service status and alerts are refreshed by a background loop every 5 s, not per request.
+        Pass the last `feed.cursor` you saw as `feed_after` to get only new items.
+      parameters:
+        - { $ref: "#/components/parameters/GameIdHeader" }
+        - name: feed_after
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/State" } } }
+        "404": { $ref: "#/components/responses/WrongGame" }
+        "409": { $ref: "#/components/responses/NotReady" }
+
+  /v1/ack:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Acknowledge the page
+      description: "Allowed only in state `paged`. Writes `acknowledged`; the state becomes `investigating`. A second call returns 409 `wrong_state`."
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      responses:
+        "200":
+          description: Acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [t]
+                properties: { t: { type: integer } }
+        "404": { $ref: "#/components/responses/WrongGame" }
+        "409": { $ref: "#/components/responses/WrongState" }
+
+  /v1/actions:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Press an action button
+      description: |
+        Allowed in `ready`, `paged`, `investigating`, `watching` (pressing a button doesn't acknowledge the page).
+        Runs the verb as a real command (≤ 30 s), writes an `action` event, and returns the command and its output.
+        One action at a time per game (`429 busy`); at most 30 per minute (`429 too_fast`).
+        `Idempotency-Key` is required: repeating a key within 10 minutes returns the first result without running the command again.
+      parameters:
+        - { $ref: "#/components/parameters/GameIdHeader" }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z0-9_-]{8,64}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_id]
+              additionalProperties: false
+              properties:
+                action_id: { type: string, examples: [catalog-flags] }
+                input:
+                  type: object
+                  description: "Values for the button's inputs (see Scene.actions). Choices must match exactly; typed values must match the button's pattern."
+                  additionalProperties: { type: string, maxLength: 64 }
+                  examples: [{ flag: SEARCH_V2, value: "false" }]
+      responses:
+        "200":
+          description: The command ran (it may still have failed; see `exit_code`)
+          content: { application/json: { schema: { $ref: "#/components/schemas/ActionResult" } } }
+        "404": { $ref: "#/components/responses/UnknownAction" }
+        "409": { $ref: "#/components/responses/WrongState" }
+        "422": { $ref: "#/components/responses/BadInput" }
+        "429": { $ref: "#/components/responses/TooFast" }
+
+  /v1/chat/replies:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Pick a reply to a chat message
+      description: "Once per message (`409 already_answered`). Writes `chat_reply`; the character's reaction (if any) arrives in the feed."
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message_id, option_id]
+              additionalProperties: false
+              properties:
+                message_id: { type: string }
+                option_id: { type: string, pattern: "^[a-z]$" }
+      responses:
+        "204": { description: Saved }
+        "404": { $ref: "#/components/responses/UnknownAction" }
+        "409": { $ref: "#/components/responses/WrongState" }
+
+  /v1/status-updates:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Post a status update (and set the status page state)
+      description: |
+        Allowed after Acknowledge (`investigating`, `watching`). At most one per 10 s.
+        `next_update_at` is in the in-world clock (`scene.starts_at + t`), must be later than now and at most 60 minutes ahead.
+        Writes `status_update` with `fields_filled` (non-empty `affected`, `doing`, `next_update_at`, plus `page_state`) and,
+        hidden, whether the success checks were passing at that moment.
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [affected, doing, page_state]
+              additionalProperties: false
+              properties:
+                affected: { type: string, maxLength: 500 }
+                doing: { type: string, maxLength: 500 }
+                next_update_at: { type: [string, "null"], pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
+                page_state: { $ref: "#/components/schemas/PageState" }
+      responses:
+        "200":
+          description: Posted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [t, fields_filled, next_update_t]
+                properties:
+                  t: { type: integer }
+                  fields_filled: { type: integer, minimum: 0, maximum: 4 }
+                  next_update_t: { type: [integer, "null"] }
+        "409": { $ref: "#/components/responses/WrongState" }
+        "422": { $ref: "#/components/responses/BadInput" }
+        "429": { $ref: "#/components/responses/TooFast" }
+
+  /v1/hints:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Open the next hint (costs 3 points)
+      description: "Allowed after Acknowledge. `409 no_hints_left`, or `409 hint_not_yet` with `retry_after_s` when the next hint has an `after_s` still in the future."
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      responses:
+        "200":
+          description: The hint
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [n, text, hints_left]
+                properties:
+                  n: { type: integer, minimum: 1, maximum: 3 }
+                  text: { type: string }
+                  hints_left: { type: integer, minimum: 0 }
+        "409": { $ref: "#/components/responses/WrongState" }
+
+  /v1/resolve:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Claim the incident is fixed; the agent runs the success checks
+      description: |
+        Allowed only in `investigating` (`409 wrong_state` otherwise, e.g. "Acknowledge the page first").
+        At most one every 5 s. Checks run in parallel, ≤ 10 s.
+        - Failed: writes `resolve_failed`; returns the failing checks' messages (never their ids); penalty 2 until −6 is reached.
+        - Passed: writes `resolve_passed`; the state becomes `watching` for the lab's watch length.
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      responses:
+        "200":
+          description: Result
+          content: { application/json: { schema: { $ref: "#/components/schemas/ResolveResult" } } }
+        "409": { $ref: "#/components/responses/WrongState" }
+        "429": { $ref: "#/components/responses/TooFast" }
+
+  /v1/give-up:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: End the game now
+      description: "Allowed in `ready`, `paged`, `investigating`, `watching`. Writes `gave_up` and `ended`."
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              additionalProperties: false
+              properties: { confirm: { const: true } }
+      responses:
+        "200":
+          description: Ended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, end_reason]
+                properties:
+                  state: { const: ended }
+                  end_reason: { const: gave_up }
+        "409": { $ref: "#/components/responses/WrongState" }
+
+  /v1/views:
+    servers: [{ url: "http://{server}:8080", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [player]
+      summary: Report that a panel was opened (optional in the MVP)
+      description: "Writes a `view` event at most once per panel per minute; extra calls are accepted and ignored."
+      parameters: [{ $ref: "#/components/parameters/GameIdHeader" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [panel]
+              additionalProperties: false
+              properties:
+                panel: { enum: [dashboards, logs, terminal, changes, map] }
+      responses:
+        "204": { description: Accepted }
+
+  /control/v1/ready:
+    servers: [{ url: "http://{server}:8081", variables: { server: { default: "10.20.0.10" } } }]
+    get:
+      tags: [control]
+      summary: Has the server finished booting? (no token needed; reveals nothing secret)
+      security: []
+      responses:
+        "200":
+          description: Boot progress
+          content: { application/json: { schema: { $ref: "#/components/schemas/Ready" } } }
+
+  /control/v1/claim:
+    servers: [{ url: "http://{server}:8081", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [control]
+      summary: Bind this server to one game and set the control token (once per boot)
+      description: |
+        Accepted once, and only after `booted` is true. From then on every other control call needs `Authorization: Bearer <token>`.
+        Before answering, the agent starts Grafana with the game's sub-path
+        (`root_url = <public_base_url>/s/<game_id>/grafana/`, contract 5) and waits until it is healthy (≤ 30 s).
+        The player cannot reach the server before this call: the gateway serves nothing but the boot screen for a `booting` game.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [game_id, token, public_base_url]
+              additionalProperties: false
+              properties:
+                game_id: { type: string, pattern: "^[A-Za-z0-9_-]{22}$" }
+                token: { type: string, pattern: "^[A-Za-z0-9_-]{43}$", description: "32 random bytes, base64url without padding" }
+                public_base_url: { type: string, pattern: "^https://[a-z0-9.-]+$", examples: ["https://drer7le45ultl.cloudfront.net"] }
+      responses:
+        "204": { description: Claimed; Grafana is up }
+        "409":
+          description: "`already_claimed` or `not_booted`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "503":
+          description: "`grafana_failed`: Grafana did not become healthy in time"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /control/v1/runbook:
+    servers: [{ url: "http://{server}:8081", variables: { server: { default: "10.20.0.10" } } }]
+    put:
+      tags: [control]
+      summary: Load the lab's runbook into memory and start the incident (once)
+      security: [{ controlToken: [] }]
+      description: |
+        The runbook is kept in memory only, never written to disk. The agent validates it (contract 1), then:
+        runs `setup`, starts ttyd if `terminal` is true, runs `fault` (writes `fault_started`), arms the page
+        (alert or fallback), and returns. The state becomes `ready`. Synchronous, ≤ 20 s.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunbookPush" }
+      responses:
+        "202":
+          description: Incident started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state]
+                properties: { state: { const: ready } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "`already_loaded` or `not_claimed`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`invalid_runbook` (format, unknown verb, unknown service); the message lists the first problems"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /control/v1/report:
+    servers: [{ url: "http://{server}:8081", variables: { server: { default: "10.20.0.10" } } }]
+    get:
+      tags: [control]
+      summary: State plus new events (gateway-auth copies them into DynamoDB every ~10 s, and once more after the end)
+      security: [{ controlToken: [] }]
+      description: Events include the hidden fields; they go to DynamoDB, never to the browser before the end.
+      parameters:
+        - name: after_seq
+          in: query
+          description: Return agent events with `seq` greater than this
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 500 }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /control/v1/end:
+    servers: [{ url: "http://{server}:8081", variables: { server: { default: "10.20.0.10" } } }]
+    post:
+      tags: [control]
+      summary: End the game from outside (the player went idle)
+      security: [{ controlToken: [] }]
+      description: |
+        gateway-auth calls this after 5 minutes without browser requests (it has already written `heartbeat_lost`).
+        The agent writes `ended` with reason `abandoned` and its final health, stops the clock and refuses further player changes.
+        If the game has already ended, returns 409 with the existing end reason.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason: { const: abandoned }
+      responses:
+        "200":
+          description: Ended
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, end_reason]
+                properties:
+                  state: { const: ended }
+                  end_reason: { const: abandoned }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "`already_ended`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+components:
+  securitySchemes:
+    controlToken:
+      type: http
+      scheme: bearer
+      description: The token given in `claim`. Compared in constant time.
+
+  parameters:
+    GameIdHeader:
+      name: X-Itr-Game-Id
+      in: header
+      required: true
+      description: Added by the gateway from the checked cookie; never trusted from the browser (the gateway overwrites it).
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{22}$" }
+
+  responses:
+    WrongGame:
+      description: "`wrong_game`: this server belongs to another game"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotReady:
+      description: "`not_ready`: no runbook loaded yet"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    WrongState:
+      description: "`wrong_state`, `game_over`, `already_answered`, `no_hints_left` or `hint_not_yet`; the message says what to do"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    UnknownAction:
+      description: "`unknown_action` or `unknown_message`"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BadInput:
+      description: "`bad_input`: an input is missing, not one of the choices, or doesn't match the pattern"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    TooFast:
+      description: "`busy` (another action is running) or `too_fast`; `Retry-After` and `retry_after_s` say when to try again"
+      headers:
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Unauthorized:
+      description: "`unauthorized`: missing or wrong control token"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, wrong_game, not_ready, wrong_state, game_over, unknown_action, unknown_message, bad_input, busy, too_fast,
+                     already_answered, no_hints_left, hint_not_yet, unauthorized, already_claimed, not_booted, not_claimed,
+                     already_loaded, invalid_runbook, already_ended, grafana_failed, internal]
+            message: { type: string }
+            retry_after_s: { type: integer }
+
+    GameState:
+      type: string
+      enum: [booting, ready, paged, investigating, watching, ended]
+
+    EndReason:
+      type: string
+      enum: [resolved, unresolved, gave_up, abandoned, failed]
+
+    PageState:
+      type: string
+      enum: [investigating, identified, monitoring, resolved]
+
+    Scene:
+      type: object
+      required: [game_id, lab, terminal, time_limit_s, scene, services, dashboards, actions, hints_total, characters]
+      properties:
+        game_id: { type: string }
+        lab:
+          type: object
+          required: [id, version, title, level]
+          properties:
+            id: { type: string }
+            version: { type: integer }
+            title: { type: string }
+            level: { enum: [intern, junior] }
+        terminal: { type: boolean }
+        time_limit_s: { type: integer }
+        scene:
+          type: object
+          required: [starts_at]
+          properties:
+            starts_at: { type: string, examples: ["14:20"] }
+            weekday: { type: string }
+        services:
+          type: array
+          description: From the world manifest; draw the service map from `calls` and `map`
+          items:
+            type: object
+            required: [name, kind, calls]
+            properties:
+              name: { type: string }
+              kind: { type: string }
+              calls: { type: array, items: { type: string } }
+              map:
+                type: object
+                properties: { x: { type: integer }, y: { type: integer } }
+        dashboards:
+          type: array
+          items:
+            type: object
+            required: [uid, title, path]
+            properties:
+              uid: { type: string }
+              title: { type: string }
+              path: { type: string, description: "Relative to the game path, e.g. grafana/d/shop-overview?kiosk&theme=dark" }
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/ActionButton" }
+        hints_total: { type: integer, minimum: 0, maximum: 3 }
+        characters:
+          type: array
+          items:
+            type: object
+            required: [id, name, role]
+            properties:
+              id: { enum: [dana, sam] }
+              name: { type: string, examples: [Dana] }
+              role: { type: string, examples: [Product] }
+
+    ActionButton:
+      type: object
+      description: A button as the player sees it (no `risky` flag)
+      required: [id, verb, target, label]
+      properties:
+        id: { type: string }
+        verb: { type: string }
+        target: { type: string }
+        label: { type: string }
+        confirm: { type: string }
+        input:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              choices: { type: array, items: { type: string } }
+              pattern: { type: string }
+
+    State:
+      type: object
+      required: [game_id, state, severity, reopened, clock, page, health, services, alerts, changes, resolve, hints, status_page, feed]
+      properties:
+        game_id: { type: string }
+        state: { $ref: "#/components/schemas/GameState" }
+        end_reason: { $ref: "#/components/schemas/EndReason" }
+        severity: { enum: [SEV2, SEV1] }
+        reopened: { type: boolean }
+        clock:
+          type: object
+          required: [t, time_left_s, scene_time]
+          properties:
+            t: { type: [integer, "null"], description: "Game time; null before the page" }
+            time_left_s: { type: [integer, "null"] }
+            scene_time: { type: [string, "null"], description: "In-world clock HH:MM (starts_at + t)" }
+        page:
+          type: object
+          required: [fired, acknowledged]
+          properties:
+            fired: { type: boolean }
+            title: { type: string, examples: ["Checkout error rate 34%"] }
+            acknowledged: { type: boolean }
+            acknowledged_t: { type: [integer, "null"] }
+        health:
+          type: object
+          required: [value]
+          properties:
+            value: { type: integer, minimum: 0, maximum: 100 }
+            failed_checkouts: { type: integer, minimum: 0 }
+        services:
+          type: array
+          items:
+            type: object
+            required: [name, status, label]
+            properties:
+              name: { type: string }
+              status: { enum: [ok, degraded, down, unknown] }
+              label: { type: string, description: "Text shown with the colour, e.g. ERRORS", examples: [ERRORS] }
+              detail: { type: string, examples: ["errors 31%"] }
+        alerts:
+          type: array
+          description: Alerts firing on the server right now (real Prometheus alerts, including noisy ones)
+          items:
+            type: object
+            required: [name, state]
+            properties:
+              name: { type: string }
+              state: { enum: [pending, firing] }
+              since_t: { type: [integer, "null"] }
+              summary: { type: string }
+        changes:
+          type: array
+          description: Recent changes, newest first (scene changes plus every change the player made), at most 30
+          items:
+            type: object
+            required: [text, by]
+            properties:
+              t: { type: [integer, "null"], description: "Game time for changes made in the game" }
+              ago_s: { type: integer, description: "For changes before the shift" }
+              service: { type: string }
+              text: { type: string }
+              by: { type: string, examples: [you, ci, dana] }
+        resolve:
+          type: object
+          required: [attempts, wrong]
+          properties:
+            attempts: { type: integer }
+            wrong: { type: integer }
+            watch_ends_in_s: { type: [integer, "null"], description: "Only in watching" }
+        hints:
+          type: object
+          required: [used, total]
+          properties:
+            used: { type: integer }
+            total: { type: integer }
+            next_available_in_s: { type: [integer, "null"] }
+        status_page:
+          type: object
+          required: [state]
+          properties:
+            state: { $ref: "#/components/schemas/PageState" }
+            last_update_t: { type: [integer, "null"] }
+            next_update_at: { type: [string, "null"] }
+        feed:
+          type: object
+          required: [cursor, items]
+          properties:
+            cursor: { type: integer, description: "Pass as feed_after next time" }
+            items:
+              type: array
+              maxItems: 100
+              items: { $ref: "#/components/schemas/FeedItem" }
+
+    FeedItem:
+      type: object
+      required: [id, kind, t]
+      description: "One thing that appeared in the incident's timeline. `id` is the cursor value. Fields by kind are listed below."
+      properties:
+        id: { type: integer }
+        kind: { enum: [chat_message, chat_reply, action_result, status_update, hint, notice] }
+        t: { type: [integer, "null"] }
+        message_id: { type: string, description: "chat_message, chat_reply" }
+        from: { enum: [dana, sam, you], description: "chat_message, chat_reply" }
+        text: { type: string, description: "chat_message, chat_reply, hint, notice" }
+        replies:
+          type: array
+          description: "chat_message with replies the player hasn't answered yet"
+          items:
+            type: object
+            required: [id, text]
+            properties: { id: { type: string }, text: { type: string } }
+        option_id: { type: string, description: chat_reply }
+        result: { $ref: "#/components/schemas/ActionResult" }
+        status_update:
+          type: object
+          description: status_update
+          properties:
+            affected: { type: string }
+            doing: { type: string }
+            next_update_at: { type: [string, "null"] }
+            page_state: { $ref: "#/components/schemas/PageState" }
+        n: { type: integer, description: hint }
+        level: { enum: [info, warning, error], description: notice }
+
+    ActionResult:
+      type: object
+      required: [action_id, label, command, exit_code, output, truncated, duration_ms, t]
+      properties:
+        action_id: { type: string }
+        label: { type: string }
+        command: { type: string, examples: ["sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' config/catalog.env && docker compose up -d catalog"] }
+        exit_code: { type: integer }
+        output: { type: string, maxLength: 4000 }
+        truncated: { type: boolean }
+        duration_ms: { type: integer }
+        t: { type: [integer, "null"] }
+
+    ResolveResult:
+      type: object
+      required: [result, attempt]
+      properties:
+        result: { enum: [passed, failed] }
+        attempt: { type: integer }
+        failing:
+          type: array
+          description: Only when failed. Plain-words messages, no check ids.
+          items:
+            type: object
+            required: [message]
+            properties: { message: { type: string, examples: ["Checkout error rate is 18% over the last 2:00 (needs under 1%)."] } }
+        penalty: { type: integer, enum: [0, 2] }
+        watch_seconds: { type: integer, description: Only when passed }
+
+    Ready:
+      type: object
+      required: [booted, claimed, runbook_loaded, agent_version, world]
+      properties:
+        booted: { type: boolean, description: "Compose services up and Prometheus answering" }
+        claimed: { type: boolean }
+        runbook_loaded: { type: boolean }
+        agent_version: { type: string }
+        world:
+          type: object
+          required: [name, version]
+          properties: { name: { type: string }, version: { type: string } }
+        components:
+          type: object
+          description: For the boot screen's progress lines
+          additionalProperties: { enum: [starting, up, failed] }
+          examples: [{ shop: up, monitoring: up, grafana: starting }]
+
+    RunbookPush:
+      type: object
+      required: [game_id, lab_id, lab_version, limits, runbook]
+      additionalProperties: false
+      properties:
+        game_id: { type: string, pattern: "^[A-Za-z0-9_-]{22}$" }
+        lab_id: { type: string }
+        lab_version: { type: integer }
+        limits:
+          type: object
+          required: [time_limit_s]
+          properties:
+            time_limit_s: { type: integer, maximum: 2400 }
+        runbook:
+          type: object
+          description: "runbook.json exactly as published by labs CI (contract 1); format itr-lab/v1"
+
+    Report:
+      type: object
+      required: [game_id, state, severity, reopened, last_seq, events]
+      properties:
+        game_id: { type: string }
+        state: { $ref: "#/components/schemas/GameState" }
+        end_reason: { $ref: "#/components/schemas/EndReason" }
+        severity: { enum: [SEV2, SEV1] }
+        reopened: { type: boolean }
+        last_seq: { type: integer, description: "Highest agent seq so far; when state is ended and this equals the last returned seq, the copy is complete" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+
+    Event:
+      type: object
+      description: One event exactly as defined in events.md (written by the agent)
+      required: [seq, at, t, by, type, data]
+      properties:
+        seq: { type: integer, minimum: 1 }
+        at: { type: string, format: date-time }
+        t: { type: [integer, "null"] }
+        by: { const: agent }
+        type: { type: string }
+        data: { type: object }

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:itr:contracts:world:v1",
+  "title": "IncidentTrainer world manifest (itr-world/v1)",
+  "description": "Part of contract 1, draft v0.1. Describes a world (a shop) for the agent. Lives next to the world's code in the labs repo (worlds/<name>/world.yaml) and is baked into the server image at /opt/itr/world.yaml. Holds no lab answers: players can read it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "name", "version", "compose", "data_mount", "logs_dir", "prometheus_url", "grafana", "services", "alerts", "metrics", "status"],
+  "properties": {
+    "format": { "const": "itr-world/v1" },
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,39}$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "compose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dir", "project", "versions_file", "config_dir"],
+      "properties": {
+        "dir": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{1,100}$", "description": "Compose folder; every verb runs here" },
+        "project": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{1,30}$" },
+        "versions_file": { "type": "string", "description": "File with <SVC>_VERSION=x.y.z lines, relative to dir (usually .env)" },
+        "config_dir": { "type": "string", "description": "Folder with <service>.env files, relative to dir" }
+      }
+    },
+    "data_mount": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{1,100}$" },
+    "logs_dir": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{1,100}$" },
+    "prometheus_url": { "type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]{2,5}$" },
+    "grafana": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port", "dashboards"],
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "dashboards": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["uid", "title"],
+            "properties": { "uid": { "type": "string", "pattern": "^[a-z0-9-]{2,40}$" }, "title": { "type": "string", "maxLength": 60 } }
+          }
+        }
+      }
+    },
+    "services": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,30}$" },
+          "kind": { "enum": ["app", "database", "cache", "queue", "proxy"] },
+          "url": { "type": "string", "pattern": "^http://127\\.0\\.0\\.1:[0-9]{2,5}$", "description": "Base URL for http_ok checks, published on the host's loopback only" },
+          "calls": { "type": "array", "uniqueItems": true, "items": { "type": "string" }, "description": "Services it calls: the arrows on the service map" },
+          "versions": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }, "description": "Image versions baked into the image, oldest first: deploy and rollback targets" },
+          "scalable": { "type": "boolean", "default": false },
+          "map": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["x", "y"],
+            "properties": { "x": { "type": "integer", "minimum": 0, "maximum": 100 }, "y": { "type": "integer", "minimum": 0, "maximum": 100 } },
+            "description": "Position on the hand-drawn service map, in percent"
+          }
+        }
+      }
+    },
+    "alerts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{2,63}$" },
+      "description": "Names of the alert rules baked into the image (symptoms only)"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_rate", "latency_p95", "failed_checkouts_total"],
+      "description": "PromQL templates. Placeholders: $service, $route (a regex, .* when not given), $window (e.g. 120s). Dollar placeholders because PromQL itself uses braces.",
+      "properties": {
+        "error_rate": { "type": "string", "minLength": 10, "description": "5xx share in percent" },
+        "latency_p95": { "type": "string", "minLength": 10, "description": "p95 latency in milliseconds" },
+        "failed_checkouts_total": { "type": "string", "minLength": 10, "description": "A counter of failed checkouts; the health bar uses its increase since the page" }
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["degraded_error_percent", "down_error_percent", "window_s"],
+      "description": "How the service map colours a service",
+      "properties": {
+        "degraded_error_percent": { "type": "number", "exclusiveMinimum": 0 },
+        "down_error_percent": { "type": "number", "exclusiveMinimum": 0 },
+        "degraded_p95_ms": { "type": "integer", "minimum": 1 },
+        "window_s": { "type": "integer", "minimum": 15, "maximum": 300 }
+      }
+    }
+  }
+}
