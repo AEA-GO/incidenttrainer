@@ -1,0 +1,45 @@
+# Stand-in shop for building the agent on a laptop (not the real teapot-basic world).
+# Ports are published on 127.0.0.1 only, like on a game server.
+name: dev-shop
+
+x-shop: &shop
+  build: ./shop
+  image: dev-shop/app:1.0.0
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 3
+
+services:
+  storefront:
+    <<: *shop
+    command: ["uvicorn", "storefront:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    env_file: config/storefront.env
+    ports: ["127.0.0.1:8001:8000"]
+    depends_on:
+      catalog: {condition: service_healthy}
+
+  catalog:
+    <<: *shop
+    command: ["uvicorn", "catalog:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    env_file: config/catalog.env
+    ports: ["127.0.0.1:8002:8000"]
+
+  traffic:
+    <<: *shop
+    command: ["python", "traffic.py"]
+    healthcheck: {disable: true}
+    depends_on:
+      storefront: {condition: service_healthy}
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1d
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+    ports: ["127.0.0.1:9090:9090"]
+    restart: unless-stopped

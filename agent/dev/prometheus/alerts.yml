@@ -1,0 +1,22 @@
+# Symptoms only, never causes: these names are listed in world.yaml (alerts).
+groups:
+  - name: shop
+    rules:
+      - alert: CheckoutErrorRateHigh
+        expr: |
+          100 * sum(rate(http_requests_total{service="storefront",route="/checkout",status=~"5.."}[1m]))
+            / clamp_min(sum(rate(http_requests_total{service="storefront",route="/checkout"}[1m])), 1e-9)
+            > 5
+        for: 15s
+        labels:
+          severity: page
+        annotations:
+          summary: "Checkout error rate {{ $value | printf \"%.0f\" }}%"
+
+      - alert: ServiceDown
+        expr: up{job="shop"} == 0
+        for: 15s
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }} is not answering"

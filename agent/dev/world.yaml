@@ -1,0 +1,49 @@
+# World manifest for the stand-in shop (contract 1, world.schema.json).
+# On a laptop the agent overrides compose.dir with the env var ITR_COMPOSE_DIR (step 3).
+# error_rate uses `or vector(0)` so "no errors" gives 0 instead of an empty result.
+format: itr-world/v1
+name: dev-shop
+version: 0.1.0
+
+compose:
+  dir: /opt/dev-shop
+  project: dev-shop
+  versions_file: .env
+  config_dir: config
+
+data_mount: /data
+logs_dir: /data/logs
+prometheus_url: http://127.0.0.1:9090
+
+grafana:            # Grafana joins the stand-in shop in step 4
+  port: 3000
+  dashboards:
+    - {uid: shop-overview, title: Shop overview}
+
+services:
+  - name: storefront
+    kind: app
+    url: http://127.0.0.1:8001
+    calls: [catalog]
+    map: {x: 20, y: 50}
+  - name: catalog
+    kind: app
+    url: http://127.0.0.1:8002
+    map: {x: 70, y: 50}
+
+alerts: [CheckoutErrorRateHigh, ServiceDown]
+
+metrics:
+  error_rate: >-
+    100 * (sum(rate(http_requests_total{service="$service",route=~"$route",status=~"5.."}[$window])) or vector(0))
+    / clamp_min(sum(rate(http_requests_total{service="$service",route=~"$route"}[$window])), 1e-9)
+  latency_p95: >-
+    1000 * histogram_quantile(0.95,
+    sum by (le) (rate(http_request_duration_seconds_bucket{service="$service",route=~"$route"}[$window])))
+  failed_checkouts_total: sum(shop_checkouts_total{result="failed"})
+
+status:
+  degraded_error_percent: 1
+  down_error_percent: 50
+  degraded_p95_ms: 1000
+  window_s: 30
