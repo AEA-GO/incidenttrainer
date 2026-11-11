@@ -4,8 +4,8 @@ Settings come from environment variables (systemd sets them on the game server):
   ITR_AGENT_HOST        default 0.0.0.0 (the security group lets only the gateway in)
   ITR_PLAYER_PORT       default 8080
   ITR_CONTROL_PORT      default 8081
-  ITR_WORLD_NAME        default dev-shop      (step 2 reads the world manifest instead)
-  ITR_WORLD_VERSION     default 0.0.0
+  ITR_WORLD_MANIFEST    default /opt/itr/world.yaml
+  ITR_COMPOSE_DIR       optional; overrides the manifest's compose.dir (laptops)
 """
 
 import asyncio
@@ -13,16 +13,19 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 import uvicorn
 
 from itr_agent.control import build_control_app
 from itr_agent.player import build_player_app
 from itr_agent.state import Agent
+from itr_agent.verbs import SubprocessRunner
+from itr_agent.world import load_world
 
 
 class JsonFormatter(logging.Formatter):
-    """One JSON object per line, so logs are easy to search (context: session id in every line)."""
+    """One JSON object per line, with the game id on every line."""
 
     def __init__(self, agent: Agent) -> None:
         super().__init__()
@@ -68,11 +71,19 @@ async def serve(agent: Agent, host: str, player_port: int, control_port: int) ->
 
 
 def run() -> None:
-    agent = Agent(
-        world_name=os.environ.get("ITR_WORLD_NAME", "dev-shop"),
-        world_version=os.environ.get("ITR_WORLD_VERSION", "0.0.0"),
+    compose_dir = os.environ.get("ITR_COMPOSE_DIR")
+    world = load_world(
+        Path(os.environ.get("ITR_WORLD_MANIFEST", "/opt/itr/world.yaml")),
+        Path(compose_dir) if compose_dir else None,
     )
+    agent = Agent(world=world, runner=SubprocessRunner())
     setup_logging(agent)
+    logging.getLogger(__name__).info(
+        "agent starting: world %s %s, compose dir %s",
+        world.name,
+        world.version,
+        world.compose_dir,
+    )
     asyncio.run(
         serve(
             agent,
