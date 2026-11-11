@@ -5,6 +5,7 @@ only what it needs to run safely on *this* world: right format, right world, eve
 service and alert exists, every verb is one it can run.
 """
 
+from itr_agent.actions import problems_with_actions
 from itr_agent.verbs import SUPPORTED_FAULT_VERBS
 from itr_agent.world import World
 
@@ -50,7 +51,5 @@ def validate_runbook(runbook: dict, world: World) -> list[str]:
             problems.append(
                 f"fault verb {step.get('verb')!r} isn't supported by this agent yet"
             )
-    for action in runbook["actions"]:
-        if action.get("target") not in world.services:
-            problems.append(f"action {action.get('id')!r} targets unknown service")
+    problems += problems_with_actions(runbook["actions"], world)
     return problems

@@ -5,23 +5,13 @@ flags, checks_passing, check ids) or anything else from the runbook that the
 player shouldn't see before the end.
 """
 
+from itr_agent.actions import label
 from itr_agent.state import Agent
 
 CHARACTERS = [
     {"id": "dana", "name": "Dana", "role": "Product"},
     {"id": "sam", "name": "Sam", "role": "Support"},
 ]
-DEFAULT_LABELS = {
-    "restart": "Restart",
-    "rollback": "Roll back",
-    "scale": "Scale",
-    "set_config": "Edit config",
-    "set_flag": "Toggle flag",
-    "clear_logs": "Clear logs",
-    "show_config": "Show config",
-    "show_status": "Show status",
-    "show_versions": "Show versions",
-}
 
 
 def scene_clock(starts_at: str, t: int) -> str:
@@ -36,9 +26,7 @@ def button(action: dict) -> dict:
         "id": action["id"],
         "verb": action["verb"],
         "target": action["target"],
-        "label": action.get(
-            "label", DEFAULT_LABELS.get(action["verb"], action["verb"])
-        ),
+        "label": label(action),
     }
     if "confirm" in action:
         shown["confirm"] = action["confirm"]
@@ -85,7 +73,7 @@ def scene_view(agent: Agent) -> dict:
 def state_view(agent: Agent, feed_after: int = 0) -> dict:
     runbook = agent.runbook
     t = agent.game_time()
-    changes = [
+    scene_changes = [
         {
             "t": None,
             "ago_s": c["ago_s"],
@@ -95,6 +83,7 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
         }
         for c in sorted(runbook["scene"]["recent_changes"], key=lambda c: c["ago_s"])
     ]
+    changes = (agent.changes + scene_changes)[:30]
     return {
         "game_id": agent.game_id,
         "state": agent.state,
@@ -134,6 +123,6 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
             "last_update_t": None,
             "next_update_at": None,
         },
-        # Chat messages, button results and notices arrive here in later steps.
-        "feed": {"cursor": feed_after, "items": []},
+        # Button results now; chat messages and notices in later steps.
+        "feed": {"cursor": agent.feed.cursor, "items": agent.feed.since(feed_after)},
     }
