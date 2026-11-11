@@ -1,0 +1,178 @@
+{
+  "game_id": "q3V9xYk2Lm8Ta1BcD4eF0g",
+  "lab_id": "dev-lab",
+  "lab_version": 1,
+  "limits": {
+    "time_limit_s": 2400
+  },
+  "runbook": {
+    "actions": [
+      {
+        "id": "show-catalog-config",
+        "target": "catalog",
+        "verb": "show_config"
+      },
+      {
+        "id": "catalog-flags",
+        "input": {
+          "flag": {
+            "choices": [
+              "SEARCH_V2"
+            ]
+          },
+          "value": {
+            "choices": [
+              "true",
+              "false"
+            ]
+          }
+        },
+        "label": "Toggle flag",
+        "target": "catalog",
+        "verb": "set_flag"
+      },
+      {
+        "id": "restart-catalog",
+        "target": "catalog",
+        "verb": "restart"
+      },
+      {
+        "id": "restart-storefront",
+        "risky": true,
+        "target": "storefront",
+        "verb": "restart"
+      }
+    ],
+    "chat": {
+      "chase": {
+        "overdue": {
+          "from": "dana",
+          "text": "You said {promised}. Any news?"
+        },
+        "silence": {
+          "after_s": 600,
+          "from": "sam",
+          "text": "Customers keep asking. Anything I can tell them?"
+        }
+      },
+      "messages": [
+        {
+          "from": "sam",
+          "id": "sam-1",
+          "replies": [
+            {
+              "id": "a",
+              "reaction": "Thanks, I'll tell customers we're on it.",
+              "text": "Investigating, about a third of checkouts fail. Next update by 14:35.",
+              "tone": "honest"
+            },
+            {
+              "id": "b",
+              "reaction": "Great, I'll say 5 minutes.",
+              "text": "Should be fixed in 5 minutes.",
+              "tone": "overconfident"
+            },
+            {
+              "id": "c",
+              "reaction": "OK... what do I tell people meanwhile?",
+              "text": "Not sure yet, looking into it.",
+              "tone": "deflecting"
+            }
+          ],
+          "text": "Getting tickets: 'payment failed' at checkout. How bad is it?",
+          "when": {
+            "at": 60
+          }
+        }
+      ]
+    },
+    "checks": {
+      "success": [
+        {
+          "id": "checkout-healthy",
+          "message": "Checkout error rate is {value}% over the last minute (needs under {threshold}%).",
+          "params": {
+            "max_percent": 1,
+            "route": "/checkout",
+            "service": "storefront",
+            "window_s": 60
+          },
+          "verb": "error_rate_below"
+        },
+        {
+          "id": "storefront-up",
+          "message": "The storefront health check is failing.",
+          "params": {
+            "path": "/health",
+            "service": "storefront"
+          },
+          "verb": "http_ok"
+        }
+      ],
+      "watch": {
+        "checks": [
+          "checkout-healthy",
+          "storefront-up"
+        ],
+        "interval_s": 10,
+        "seconds": 240
+      }
+    },
+    "fault": [
+      {
+        "params": {
+          "flag": "SEARCH_V2",
+          "value": "true"
+        },
+        "target": "catalog",
+        "verb": "set_flag"
+      }
+    ],
+    "format": "itr-lab/v1",
+    "health": {
+      "budget_failed_checkouts": 600
+    },
+    "hints": [
+      {
+        "id": "h1",
+        "text": "Which service started failing first?"
+      },
+      {
+        "after_s": 300,
+        "id": "h2",
+        "text": "Look at what changed shortly before the errors began."
+      }
+    ],
+    "id": "dev-lab",
+    "level": "intern",
+    "limits": {
+      "time_limit_s": 2400
+    },
+    "page": {
+      "alert": "CheckoutErrorRateHigh",
+      "fallback_after_s": 90,
+      "severity": "SEV2",
+      "title": "Checkout error rate {value}%"
+    },
+    "scene": {
+      "recent_changes": [
+        {
+          "ago_s": 1500,
+          "by": "dana",
+          "service": "catalog",
+          "text": "feature flag SEARCH_V2 turned on"
+        },
+        {
+          "ago_s": 86400,
+          "by": "ci",
+          "service": "storefront",
+          "text": "timeout 3s -> 2s"
+        }
+      ],
+      "starts_at": "14:20",
+      "weekday": "Tuesday"
+    },
+    "version": 1,
+    "world": "dev-shop"
+  }
+}

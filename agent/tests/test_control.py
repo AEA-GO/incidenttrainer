@@ -6,7 +6,7 @@ def test_ready_before_claim(control):
     assert body["booted"] is True
     assert body["claimed"] is False
     assert body["runbook_loaded"] is False
-    assert body["world"] == {"name": "dev-shop", "version": "0.0.0"}
+    assert body["world"] == {"name": "dev-shop", "version": "0.1.0"}
 
 
 def test_claim_once(control):

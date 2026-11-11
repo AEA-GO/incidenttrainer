@@ -1,0 +1,110 @@
+# Lab for the stand-in shop (dev-shop). FICTIONAL, safe to be public.
+# Same story as docs/contracts/examples/example-lab.yaml, trimmed to the two dev services.
+# dev-lab.push.json is generated from this file (see agent/dev/README.md).
+format: itr-lab/v1
+id: dev-lab
+version: 1
+world: dev-shop
+course: {id: dev-course, order: 1}
+
+card:
+  title: Tuesday afternoon errors
+  hook: "Tuesday, 14:20. About a third of checkouts fail."
+  level: intern
+  minutes: 15
+  skills:
+    - Reading a service dashboard
+    - Linking symptoms to recent changes
+  tools: [grafana, logs, buttons]
+  handover_note: |
+    Quiet morning. Catalog had a planned change around lunch.
+    Nothing else open. Good luck.
+
+scoring:
+  target_time_s: 300
+
+health:
+  budget_failed_checkouts: 600
+
+scene:
+  starts_at: "14:20"
+  weekday: Tuesday
+  recent_changes:
+    - {ago_s: 1500, service: catalog, text: "feature flag SEARCH_V2 turned on", by: dana}
+    - {ago_s: 86400, service: storefront, text: "timeout 3s -> 2s", by: ci}
+
+fault:
+  - verb: set_flag
+    target: catalog
+    params: {flag: SEARCH_V2, value: "true"}
+
+page:
+  alert: CheckoutErrorRateHigh
+  fallback_after_s: 90
+  title: "Checkout error rate {value}%"
+  severity: SEV2
+
+chat:
+  messages:
+    - id: sam-1
+      from: sam
+      when: {at: 60}
+      text: "Getting tickets: 'payment failed' at checkout. How bad is it?"
+      replies:
+        - {id: a, tone: honest, text: "Investigating, about a third of checkouts fail. Next update by 14:35.", reaction: "Thanks, I'll tell customers we're on it."}
+        - {id: b, tone: overconfident, text: "Should be fixed in 5 minutes.", reaction: "Great, I'll say 5 minutes."}
+        - {id: c, tone: deflecting, text: "Not sure yet, looking into it.", reaction: "OK... what do I tell people meanwhile?"}
+  chase:
+    overdue: {from: dana, text: "You said {promised}. Any news?"}
+    silence: {from: sam, after_s: 600, text: "Customers keep asking. Anything I can tell them?"}
+
+actions:
+  - {id: show-catalog-config, verb: show_config, target: catalog}
+  - id: catalog-flags
+    verb: set_flag
+    target: catalog
+    label: Toggle flag
+    input:
+      flag: {choices: [SEARCH_V2]}
+      value: {choices: ["true", "false"]}
+  - {id: restart-catalog, verb: restart, target: catalog}
+  - {id: restart-storefront, verb: restart, target: storefront, risky: true}
+
+checks:
+  success:
+    - id: checkout-healthy
+      verb: error_rate_below
+      params: {service: storefront, route: /checkout, max_percent: 1, window_s: 60}
+      message: "Checkout error rate is {value}% over the last minute (needs under {threshold}%)."
+    - id: storefront-up
+      verb: http_ok
+      params: {service: storefront, path: /health}
+      message: "The storefront health check is failing."
+  watch:
+    seconds: 240
+    interval_s: 10
+
+hints:
+  - {id: h1, text: "Which service started failing first?"}
+  - {id: h2, after_s: 300, text: "Look at what changed shortly before the errors began."}
+
+debrief:
+  summary: "A new search feature in catalog failed for some products, and checkout failed with it."
+  what_happened: |
+    A feature flag turned on a new search path in catalog. For every third product it
+    threw an error, and storefront failed the whole checkout when catalog failed.
+  root_cause: "A feature flag enabled a broken code path in catalog."
+  expert:
+    time_s: 240
+    timeline:
+      - {t: 20, text: "Acknowledged the page."}
+      - {t: 180, text: "Recent changes: a catalog flag flipped 25 minutes before."}
+      - {t: 240, text: "Turned the flag off, error rate fell, pressed Resolve."}
+    commands:
+      - {command: "docker compose logs --since 30m catalog", why: "See the first errors and when they began."}
+  in_real_life:
+    text: "Config and flag changes are one of the most common outage triggers."
+  lessons:
+    - "Check recent changes early."
+
+secrets: [SEARCH_V2]
