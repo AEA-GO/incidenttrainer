@@ -47,6 +47,16 @@ curl -s -X POST localhost:8080/v1/ack -H "$G"; echo     # after the page: Acknow
 curl -s localhost:8081/control/v1/report -H "Authorization: Bearer $T"; echo
 ```
 Within ~30 s the alert fires, the agent pages by itself (`state: paged`, `t` starts at 0, in-world time 14:20), and the health bar starts dropping. If the alert is late, the fallback pages after 90 s.
+
+Now fix it with the buttons (each click needs its own `Idempotency-Key`; repeating a key returns the first answer without running again):
+```bash
+B='Content-Type: application/json'
+curl -s -X POST localhost:8080/v1/actions -H "$G" -H "$B" -H 'Idempotency-Key: click-0001' \
+  -d '{"action_id":"show-catalog-config"}'; echo
+curl -s -X POST localhost:8080/v1/actions -H "$G" -H "$B" -H 'Idempotency-Key: click-0002' \
+  -d '{"action_id":"catalog-flags","input":{"flag":"SEARCH_V2","value":"false"}}'; echo
+```
+Each answer has the exact `command` and its `output`. Within about a minute the service map turns `OK` and the alert clears; `/v1/state` shows the result in `feed` and your change at the top of `changes`.
 Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.env && docker compose -f dev/compose.yaml up -d catalog`. Restart the agent to play again (a server is claimed once).
 
 ## Layout
@@ -56,7 +66,9 @@ Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.
 | `main.py` | starts both servers; reads the world manifest; JSON logs with `game_id` on every line |
 | `state.py` | the `Agent`: everything it remembers, in memory only (the runbook too) |
 | `control.py` | port 8081: ready, claim, runbook, report |
-| `player.py` | port 8080: scene, state, ack |
+| `player.py` | port 8080: scene, state, ack, actions |
+| `actions.py` | buttons: input checks, labels, recent-change text, runbook checks |
+| `feed.py` | the player's timeline (cursor-based) |
 | `views.py` | what the player sees (never hidden fields) |
 | `observe.py` | one look at the shop: alerts, failed checkouts, service colours |
 | `prometheus.py` | Prometheus API client (no data rather than errors) |
@@ -70,5 +82,6 @@ Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.
 
 ## Status
 
-Steps 1–4 of 7: ports, claim with token, runbook in memory, the fault really runs (`set_config`, `set_flag`), diary + report, background loop (every `ITR_TICK_S`, default 2 s) that pages from the real alert or the fallback, game clock and in-world time, Acknowledge, health bar from failed checkouts, service map colours, firing alerts.
-Next: buttons, checks and Resolve, end of game.
+Steps 1–5 of 7: ports, claim with token, runbook in memory, the fault really runs (`set_config`, `set_flag`), diary + report, background loop (every `ITR_TICK_S`, default 2 s) that pages from the real alert or the fallback, game clock and in-world time, Acknowledge, health bar from failed checkouts, service map colours, firing alerts.
+Step 5: buttons (`POST /v1/actions`) for restart, rollback, scale, set_config, set_flag, clear_logs, show_config, show_status, show_versions; exact command + output; `action` event with the hidden `risky` flag; feed and recent changes; one action at a time, 30 a minute, Idempotency-Key.
+Next: checks and Resolve with the watch, end of game.

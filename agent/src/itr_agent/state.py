@@ -14,12 +14,15 @@ import hmac
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
+from itr_agent.actions import change_text, check_input, label
 from itr_agent.errors import AgentError
 from itr_agent.events import EventLog
+from itr_agent.feed import Feed
 from itr_agent.observe import Observation, ServiceStatus, observe
 from itr_agent.prometheus import Alert, PrometheusLike
 from itr_agent.runbook import validate_runbook
@@ -28,6 +31,9 @@ from itr_agent.world import World
 
 GameState = Literal["booting", "ready", "paged", "investigating", "watching", "ended"]
 HEALTH_EVENT_EVERY_S = 30
+ACTIONS_PER_MINUTE = 30
+IDEMPOTENCY_TTL_S = 600
+PLAYING = ("ready", "paged", "investigating", "watching")
 log = logging.getLogger(__name__)
 
 
@@ -47,6 +53,9 @@ class Agent:
     severity: str = "SEV2"
     time_limit_s: int = 2400
     events: EventLog = field(default_factory=EventLog)
+    feed: Feed = field(default_factory=Feed)
+    # Changes the player made, newest first (shown in "Recent changes")
+    changes: list[dict] = field(default_factory=list)
     # The page
     page_title: str | None = None
     acknowledged_t: int | None = None
@@ -62,6 +71,10 @@ class Agent:
     _failed_baseline: float | None = field(default=None, repr=False)
     _last_health_event_t: int | None = field(default=None, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    # One button at a time; the main lock is never held while a command runs.
+    _action_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _recent_actions: deque = field(default_factory=deque, repr=False)
+    _idempotent: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         self.verbs = Verbs(self.world, self.runner)
@@ -179,6 +192,87 @@ class Agent:
             self.state = "investigating"
             self.events.add("acknowledged", t=t)
             return t
+
+    # ----- player: buttons -----------------------------------------------------
+
+    def press(self, action_id: str, given: dict[str, str], key: str) -> dict:
+        """Run one button (contract 2, POST /v1/actions). Returns the ActionResult."""
+        with self._lock:
+            if self.state not in PLAYING:
+                raise AgentError(409, "game_over", "The game is over.")
+            now = self.clock()
+            self._forget_old_keys(now)
+            if key in self._idempotent:
+                return self._idempotent[key][1]  # a repeated click: same answer
+            action = next(
+                (a for a in self.runbook["actions"] if a["id"] == action_id), None
+            )
+            if action is None:
+                raise AgentError(404, "unknown_action", "There is no such button.")
+            values = check_input(action, given)
+            self._check_rate(now)
+
+        if not self._action_lock.acquire(blocking=False):
+            raise AgentError(429, "busy", "Another action is still running.", 2)
+        try:
+            result = self.verbs.run_button(action["verb"], action["target"], values)
+        except VerbError as error:
+            raise AgentError(422, "bad_input", str(error)) from error
+        finally:
+            self._action_lock.release()
+
+        with self._lock:
+            t = self.game_time()
+            response = {
+                "action_id": action_id,
+                "label": label(action),
+                "command": result.command,
+                "exit_code": result.exit_code,
+                "output": result.output,
+                "truncated": result.truncated,
+                "duration_ms": result.duration_ms,
+                "t": t,
+            }
+            self.events.add(
+                "action",
+                {
+                    "action_id": action_id,
+                    "verb": action["verb"],
+                    "target": action["target"],
+                    "params": values,
+                    "command": result.command,
+                    "exit_code": result.exit_code,
+                    "output": result.output,
+                    "truncated": result.truncated,
+                    "duration_ms": result.duration_ms,
+                    "risky": bool(action.get("risky", False)),  # hidden until the end
+                },
+                t=t,
+            )
+            self.feed.add("action_result", t, result=response)
+            text = change_text(result, values)
+            if text:
+                self.changes.insert(
+                    0, {"t": t, "service": action["target"], "text": text, "by": "you"}
+                )
+            self._idempotent[key] = (self.clock(), response)
+            log.info("action %s -> exit %s", action_id, result.exit_code)
+            return response
+
+    def _check_rate(self, now: float) -> None:
+        while self._recent_actions and now - self._recent_actions[0] >= 60:
+            self._recent_actions.popleft()
+        if len(self._recent_actions) >= ACTIONS_PER_MINUTE:
+            wait = int(60 - (now - self._recent_actions[0])) + 1
+            raise AgentError(429, "too_fast", "Too many actions. Wait a moment.", wait)
+        self._recent_actions.append(now)
+
+    def _forget_old_keys(self, now: float) -> None:
+        old = [
+            k for k, (at, _) in self._idempotent.items() if now - at > IDEMPOTENCY_TTL_S
+        ]
+        for k in old:
+            del self._idempotent[k]
 
     # ----- background loop ---------------------------------------------------
 

@@ -6,10 +6,18 @@ The gateway strips /s/<game_id>/api and adds X-Itr-Game-Id from the checked cook
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from itr_agent.errors import AgentError, install_error_handlers
 from itr_agent.state import Agent
 from itr_agent.views import scene_view, state_view
+
+
+class ActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: str = Field(max_length=40)
+    input: dict[str, str] = Field(default_factory=dict)
 
 
 def build_player_app(agent: Agent) -> FastAPI:
@@ -37,5 +45,13 @@ def build_player_app(agent: Agent) -> FastAPI:
     @app.post("/v1/ack", dependencies=guards)
     def ack() -> dict:
         return {"t": agent.acknowledge()}
+
+    @app.post("/v1/actions", dependencies=guards)
+    def actions(
+        body: ActionRequest,
+        idempotency_key: Annotated[str, Header(pattern=r"^[A-Za-z0-9_-]{8,64}$")],
+    ) -> dict:
+        """Press a button. Repeating the same Idempotency-Key never runs it twice."""
+        return agent.press(body.action_id, body.input, idempotency_key)
 
     return app

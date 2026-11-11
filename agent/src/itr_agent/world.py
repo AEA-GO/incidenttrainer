@@ -17,6 +17,8 @@ class Service:
     url: str | None
     calls: tuple[str, ...]
     map: dict[str, int] | None
+    versions: tuple[str, ...] = ()
+    scalable: bool = False
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class World:
     compose_dir: Path
     project: str
     config_dir: str
+    versions_file: str
+    logs_dir: Path
     prometheus_url: str
     alerts: tuple[str, ...]
     services: dict[str, Service]
@@ -46,6 +50,11 @@ class World:
         """The env file a service reads its settings and flags from."""
         return self.compose_dir / self.config_dir / f"{service}.env"
 
+    @property
+    def versions_path(self) -> Path:
+        """The file with <SERVICE>_VERSION=x.y.z lines (deploy and rollback)."""
+        return self.compose_dir / self.versions_file
+
 
 def load_world(path: Path, compose_dir_override: Path | None = None) -> World:
     data = yaml.safe_load(path.read_text())
@@ -54,7 +63,13 @@ def load_world(path: Path, compose_dir_override: Path | None = None) -> World:
     compose = data["compose"]
     services = {
         s["name"]: Service(
-            s["name"], s["kind"], s.get("url"), tuple(s.get("calls", [])), s.get("map")
+            s["name"],
+            s["kind"],
+            s.get("url"),
+            tuple(s.get("calls", [])),
+            s.get("map"),
+            tuple(s.get("versions", [])),
+            bool(s.get("scalable", False)),
         )
         for s in data["services"]
     }
@@ -66,6 +81,8 @@ def load_world(path: Path, compose_dir_override: Path | None = None) -> World:
         compose_dir=(compose_dir_override or Path(compose["dir"])).resolve(),
         project=compose["project"],
         config_dir=compose["config_dir"],
+        versions_file=compose["versions_file"],
+        logs_dir=Path(data["logs_dir"]),
         prometheus_url=data["prometheus_url"],
         alerts=tuple(data["alerts"]),
         services=services,
