@@ -38,7 +38,15 @@ curl -s -X PUT localhost:8081/control/v1/runbook -H 'Content-Type: application/j
   -H "Authorization: Bearer $T" -d @dev/labs/dev-lab.push.json; echo
 curl -s localhost:8081/control/v1/report -H "Authorization: Bearer $T"; echo
 ```
-The agent turns the catalog flag on (watch the Prometheus alert fire at http://localhost:9090/alerts) and the report shows `fault_started`.
+The agent turns the catalog flag on and the report shows `fault_started`. Then play as the browser:
+```bash
+G='X-Itr-Game-Id: q3V9xYk2Lm8Ta1BcD4eF0g'
+curl -s localhost:8080/v1/scene -H "$G"; echo          # fixed data: lab, services, buttons
+watch -n 2 "curl -s localhost:8080/v1/state -H '$G'"   # live: clock, page, health, service map
+curl -s -X POST localhost:8080/v1/ack -H "$G"; echo     # after the page: Acknowledge
+curl -s localhost:8081/control/v1/report -H "Authorization: Bearer $T"; echo
+```
+Within ~30 s the alert fires, the agent pages by itself (`state: paged`, `t` starts at 0, in-world time 14:20), and the health bar starts dropping. If the alert is late, the fallback pages after 90 s.
 Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.env && docker compose -f dev/compose.yaml up -d catalog`. Restart the agent to play again (a server is claimed once).
 
 ## Layout
@@ -48,7 +56,10 @@ Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.
 | `main.py` | starts both servers; reads the world manifest; JSON logs with `game_id` on every line |
 | `state.py` | the `Agent`: everything it remembers, in memory only (the runbook too) |
 | `control.py` | port 8081: ready, claim, runbook, report |
-| `player.py` | port 8080 |
+| `player.py` | port 8080: scene, state, ack |
+| `views.py` | what the player sees (never hidden fields) |
+| `observe.py` | one look at the shop: alerts, failed checkouts, service colours |
+| `prometheus.py` | Prometheus API client (no data rather than errors) |
 | `world.py` | reads the world manifest |
 | `runbook.py` | checks a runbook fits this world before accepting it |
 | `verbs.py` | real commands (no shell, checked inputs); shows the player a readable command |
@@ -59,5 +70,5 @@ Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.
 
 ## Status
 
-Steps 1–3 of 7: ports, claim with token, runbook in memory, the fault really runs (`set_config`, `set_flag`), diary + report.
-Next: game clock and page, buttons, checks and Resolve, end of game.
+Steps 1–4 of 7: ports, claim with token, runbook in memory, the fault really runs (`set_config`, `set_flag`), diary + report, background loop (every `ITR_TICK_S`, default 2 s) that pages from the real alert or the fallback, game clock and in-world time, Acknowledge, health bar from failed checkouts, service map colours, firing alerts.
+Next: buttons, checks and Resolve, end of game.

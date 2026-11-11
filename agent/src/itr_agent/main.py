@@ -6,6 +6,7 @@ Settings come from environment variables (systemd sets them on the game server):
   ITR_CONTROL_PORT      default 8081
   ITR_WORLD_MANIFEST    default /opt/itr/world.yaml
   ITR_COMPOSE_DIR       optional; overrides the manifest's compose.dir (laptops)
+  ITR_TICK_S            default 2 (how often the agent looks at Prometheus)
 """
 
 import asyncio
@@ -13,12 +14,14 @@ import json
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
 
 import uvicorn
 
 from itr_agent.control import build_control_app
 from itr_agent.player import build_player_app
+from itr_agent.prometheus import PrometheusClient
 from itr_agent.state import Agent
 from itr_agent.verbs import SubprocessRunner
 from itr_agent.world import load_world
@@ -76,7 +79,11 @@ def run() -> None:
         Path(os.environ.get("ITR_WORLD_MANIFEST", "/opt/itr/world.yaml")),
         Path(compose_dir) if compose_dir else None,
     )
-    agent = Agent(world=world, runner=SubprocessRunner())
+    agent = Agent(
+        world=world,
+        runner=SubprocessRunner(),
+        prometheus=PrometheusClient(world.prometheus_url),
+    )
     setup_logging(agent)
     logging.getLogger(__name__).info(
         "agent starting: world %s %s, compose dir %s",
@@ -84,6 +91,14 @@ def run() -> None:
         world.version,
         world.compose_dir,
     )
+    stop = threading.Event()
+    loop = threading.Thread(
+        target=agent.run_loop,
+        args=(stop, float(os.environ.get("ITR_TICK_S", "2"))),
+        name="game-loop",
+        daemon=True,
+    )
+    loop.start()
     asyncio.run(
         serve(
             agent,

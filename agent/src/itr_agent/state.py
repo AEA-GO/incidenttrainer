@@ -1,22 +1,33 @@
 """Everything the agent remembers about its one game. Lives only in memory.
 
 The runbook (contract 1) is stored here and never written to disk.
-States follow docs/contracts/game-states.md.
+States follow docs/contracts/game-states.md; events follow docs/contracts/events.md.
+
+Two things change the game:
+- HTTP calls (claim, runbook, ack, ...), each under the lock;
+- the background loop calling `tick()` every couple of seconds: it looks at
+  Prometheus, pages when the lab's alert fires (or the fallback time passes),
+  and keeps the health bar up to date.
 """
 
 import hmac
 import logging
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
 from itr_agent.errors import AgentError
 from itr_agent.events import EventLog
+from itr_agent.observe import Observation, ServiceStatus, observe
+from itr_agent.prometheus import Alert, PrometheusLike
 from itr_agent.runbook import validate_runbook
 from itr_agent.verbs import CommandRunner, VerbError, Verbs
 from itr_agent.world import World
 
 GameState = Literal["booting", "ready", "paged", "investigating", "watching", "ended"]
+HEALTH_EVENT_EVERY_S = 30
 log = logging.getLogger(__name__)
 
 
@@ -24,21 +35,38 @@ log = logging.getLogger(__name__)
 class Agent:
     world: World
     runner: CommandRunner
-    # Step 1-3: always True. A later step replaces this with real checks
+    prometheus: PrometheusLike
+    clock: Callable[[], float] = time.monotonic
+    # Always True for now. A later step replaces this with real checks
     # (Compose up, Prometheus answering).
     booted: bool = True
     components: dict[str, str] = field(default_factory=dict)
     game_id: str | None = None
     public_base_url: str | None = None
     state: GameState = "booting"
+    severity: str = "SEV2"
     time_limit_s: int = 2400
     events: EventLog = field(default_factory=EventLog)
+    # The page
+    page_title: str | None = None
+    acknowledged_t: int | None = None
+    # What the background loop last saw
+    alerts: list[Alert] = field(default_factory=list)
+    services: list[ServiceStatus] = field(default_factory=list)
+    health: int = 100
+    failed_checkouts: int = 0
     _token: str | None = field(default=None, repr=False)
     _runbook: dict | None = field(default=None, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _fault_at: float | None = field(default=None, repr=False)
+    _paged_at: float | None = field(default=None, repr=False)
+    _failed_baseline: float | None = field(default=None, repr=False)
+    _last_health_event_t: int | None = field(default=None, repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def __post_init__(self) -> None:
         self.verbs = Verbs(self.world, self.runner)
+
+    # ----- facts -------------------------------------------------------------
 
     @property
     def claimed(self) -> bool:
@@ -47,6 +75,21 @@ class Agent:
     @property
     def runbook_loaded(self) -> bool:
         return self._runbook is not None
+
+    @property
+    def runbook(self) -> dict:
+        """Only for building the player's view; never sent as a whole."""
+        if self._runbook is None:
+            raise AgentError(409, "not_ready", "The game hasn't started yet.")
+        return self._runbook
+
+    def game_time(self) -> int | None:
+        """Seconds since the page (t). None before the page."""
+        if self._paged_at is None:
+            return None
+        return int(self.clock() - self._paged_at)
+
+    # ----- control: claim and runbook ---------------------------------------
 
     def claim(self, game_id: str, token: str, public_base_url: str) -> None:
         """Bind this server to one game. Accepted once per boot (contract 2, claim)."""
@@ -117,4 +160,87 @@ class Agent:
             self._runbook = runbook
             self.time_limit_s = time_limit_s
             self.state = "ready"
+            self._fault_at = self.clock()
             self.events.add("fault_started")
+
+    # ----- player: acknowledge ------------------------------------------------
+
+    def acknowledge(self) -> int:
+        with self._lock:
+            if self.state != "paged":
+                message = (
+                    "There is no page to acknowledge yet."
+                    if self.state == "ready"
+                    else "The page is already acknowledged."
+                )
+                raise AgentError(409, "wrong_state", message)
+            t = self.game_time() or 0
+            self.acknowledged_t = t
+            self.state = "investigating"
+            self.events.add("acknowledged", t=t)
+            return t
+
+    # ----- background loop ---------------------------------------------------
+
+    def tick(self) -> None:
+        """One look at the world. Safe to call any time; does nothing before the runbook."""
+        if not self.runbook_loaded or self.state == "ended":
+            return
+        seen = observe(self.prometheus, self.world)  # network: outside the lock
+        with self._lock:
+            self.alerts = seen.alerts
+            self.services = seen.services
+            if self.state == "ready":
+                self._maybe_page(seen)
+            if self._paged_at is not None:
+                self._update_health(seen)
+
+    def _maybe_page(self, seen: Observation) -> None:
+        page = self.runbook["page"]
+        mine = [a for a in seen.alerts if a.name == page["alert"]]
+        firing = next((a for a in mine if a.state == "firing"), None)
+        waited = self.clock() - (self._fault_at or self.clock())
+        if firing is not None:
+            self._page("alert", firing.value, seen)
+        elif waited >= page["fallback_after_s"]:
+            pending_value = next((a.value for a in mine if a.value is not None), None)
+            self._page("fallback", pending_value, seen)
+
+    def _page(self, source: str, value: float | None, seen: Observation) -> None:
+        page = self.runbook["page"]
+        shown = "?" if value is None else str(round(value))
+        self.page_title = page["title"].replace("{value}", shown)
+        self._paged_at = self.clock()
+        self._failed_baseline = seen.failed_checkouts_total or 0.0
+        self.state = "paged"
+        self.events.add(
+            "paged",
+            {"source": source, "title": self.page_title, "severity": page["severity"]},
+            t=0,
+        )
+        log.info("paged (%s): %s", source, self.page_title)
+
+    def _update_health(self, seen: Observation) -> None:
+        if seen.failed_checkouts_total is None:
+            return  # no data this time: keep the last value
+        budget = self.runbook["health"]["budget_failed_checkouts"]
+        failed = max(0.0, seen.failed_checkouts_total - (self._failed_baseline or 0.0))
+        self.failed_checkouts = int(failed)
+        self.health = max(0, min(100, round(100 - 100 * failed / budget)))
+        t = self.game_time() or 0
+        last = self._last_health_event_t
+        if last is None or t - last >= HEALTH_EVENT_EVERY_S:
+            self._last_health_event_t = t
+            self.events.add(
+                "health",
+                {"value": self.health, "failed_checkouts": self.failed_checkouts},
+                t=t,
+            )
+
+    def run_loop(self, stop: threading.Event, every_s: float = 2.0) -> None:
+        """Call tick() until stopped. Errors are logged, never fatal."""
+        while not stop.wait(every_s):
+            try:
+                self.tick()
+            except Exception:
+                log.exception("tick failed")

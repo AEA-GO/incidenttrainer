@@ -16,6 +16,16 @@ class Service:
     kind: str
     url: str | None
     calls: tuple[str, ...]
+    map: dict[str, int] | None
+
+
+@dataclass(frozen=True)
+class StatusRules:
+    """How the service map colours a service (world.yaml `status`)."""
+
+    degraded_error_percent: float
+    down_error_percent: float
+    window_s: int
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,8 @@ class World:
     alerts: tuple[str, ...]
     services: dict[str, Service]
     metrics: dict[str, str]
+    dashboards: tuple[dict[str, str], ...]
+    status: StatusRules
 
     def config_file(self, service: str) -> Path:
         """The env file a service reads its settings and flags from."""
@@ -42,10 +54,11 @@ def load_world(path: Path, compose_dir_override: Path | None = None) -> World:
     compose = data["compose"]
     services = {
         s["name"]: Service(
-            s["name"], s["kind"], s.get("url"), tuple(s.get("calls", []))
+            s["name"], s["kind"], s.get("url"), tuple(s.get("calls", [])), s.get("map")
         )
         for s in data["services"]
     }
+    status = data["status"]
     return World(
         name=data["name"],
         version=data["version"],
@@ -57,4 +70,10 @@ def load_world(path: Path, compose_dir_override: Path | None = None) -> World:
         alerts=tuple(data["alerts"]),
         services=services,
         metrics=dict(data["metrics"]),
+        dashboards=tuple(data["grafana"]["dashboards"]),
+        status=StatusRules(
+            degraded_error_percent=status["degraded_error_percent"],
+            down_error_percent=status["down_error_percent"],
+            window_s=status["window_s"],
+        ),
     )
