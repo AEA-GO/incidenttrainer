@@ -6,6 +6,7 @@ service and alert exists, every verb is one it can run.
 """
 
 from itr_agent.actions import problems_with_actions
+from itr_agent.checks import CHECK_VERBS
 from itr_agent.verbs import SUPPORTED_FAULT_VERBS
 from itr_agent.world import World
 
@@ -52,4 +53,29 @@ def validate_runbook(runbook: dict, world: World) -> list[str]:
                 f"fault verb {step.get('verb')!r} isn't supported by this agent yet"
             )
     problems += problems_with_actions(runbook["actions"], world)
+    problems += problems_with_checks(runbook["checks"], world)
+    return problems
+
+
+def problems_with_checks(checks: dict, world: World) -> list[str]:
+    problems = []
+    success = checks.get("success", [])
+    if not success:
+        problems.append("there are no success checks")
+    for check in success + checks.get("damage", []):
+        name, verb, params = check.get("id"), check.get("verb"), check.get("params", {})
+        if verb not in CHECK_VERBS:
+            problems.append(f"check {name!r}: verb {verb!r} isn't supported")
+            continue
+        service = params.get("service")
+        if service is not None and service not in world.services:
+            problems.append(f"check {name!r} uses unknown service {service!r}")
+        elif verb == "http_ok" and not world.services[service].url:
+            problems.append(f"check {name!r}: {service} has no URL to call")
+    watch = checks.get("watch", {})
+    if "seconds" not in watch:
+        problems.append("the watch has no length")
+    unknown = set(watch.get("checks", [])) - {c.get("id") for c in success}
+    if unknown:
+        problems.append(f"watch uses unknown checks: {', '.join(sorted(unknown))}")
     return problems

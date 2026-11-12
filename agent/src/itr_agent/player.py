@@ -3,7 +3,7 @@
 The gateway strips /s/<game_id>/api and adds X-Itr-Game-Id from the checked cookie.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,6 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from itr_agent.errors import AgentError, install_error_handlers
 from itr_agent.state import Agent
 from itr_agent.views import scene_view, state_view
+
+
+class GiveUpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: Literal[True]
 
 
 class ActionRequest(BaseModel):
@@ -53,5 +59,14 @@ def build_player_app(agent: Agent) -> FastAPI:
     ) -> dict:
         """Press a button. Repeating the same Idempotency-Key never runs it twice."""
         return agent.press(body.action_id, body.input, idempotency_key)
+
+    @app.post("/v1/resolve", dependencies=guards)
+    def resolve() -> dict:
+        """Run the success checks. Failed: what's still wrong. Passed: the watch starts."""
+        return agent.resolve()
+
+    @app.post("/v1/give-up", dependencies=guards)
+    def give_up(body: GiveUpRequest) -> dict:
+        return agent.give_up()
 
     return app
