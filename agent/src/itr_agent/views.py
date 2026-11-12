@@ -87,8 +87,9 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
     return {
         "game_id": agent.game_id,
         "state": agent.state,
+        "end_reason": agent.end_reason,
         "severity": agent.severity,
-        "reopened": False,
+        "reopened": agent.reopened,
         "clock": {
             "t": t,
             "time_left_s": None if t is None else max(0, agent.time_limit_s - t),
@@ -112,7 +113,11 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
             for a in agent.alerts
         ],
         "changes": changes,
-        "resolve": {"attempts": 0, "wrong": 0, "watch_ends_in_s": None},
+        "resolve": {
+            "attempts": agent.resolve_attempts,
+            "wrong": agent.wrong_resolves,
+            "watch_ends_in_s": agent.watch_ends_in(),
+        },
         "hints": {
             "used": 0,
             "total": len(runbook.get("hints", [])),
@@ -123,6 +128,6 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
             "last_update_t": None,
             "next_update_at": None,
         },
-        # Button results now; chat messages and notices in later steps.
+        # Button results and notices; chat messages come with the chat feature.
         "feed": {"cursor": agent.feed.cursor, "items": agent.feed.since(feed_after)},
     }

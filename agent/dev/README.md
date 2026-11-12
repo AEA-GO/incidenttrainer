@@ -36,6 +36,10 @@ Errors stop; the alert clears after about a minute (the rule averages over 1 min
 
 Logs: `docker compose logs -f catalog storefront` (JSON lines).
 
+## Play a game
+
+`play.py` plays a whole game against the agent; see "Play a game on your laptop" in `../README.md`.
+
 ## Stop
 
 ```bash

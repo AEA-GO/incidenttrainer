@@ -3,7 +3,7 @@
 There is deliberately no endpoint that returns the runbook.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +24,12 @@ class ClaimRequest(BaseModel):
     public_base_url: str = Field(
         pattern=r"^(https://[a-z0-9.-]+|http://localhost(:[0-9]{2,5})?)$"
     )
+
+
+class EndRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Literal["abandoned"]
 
 
 class Limits(BaseModel):
@@ -86,10 +92,20 @@ def build_control_app(agent: Agent) -> FastAPI:
         return {
             "game_id": agent.game_id,
             "state": agent.state,
-            "severity": "SEV2",
-            "reopened": False,
+            "severity": agent.severity,
+            "reopened": agent.reopened,
+            "end_reason": agent.end_reason,
             "last_seq": agent.events.last_seq,
             "events": [e.to_dict() for e in agent.events.since(after_seq, limit)],
         }
+
+    @app.post("/control/v1/end")
+    def end(
+        body: EndRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict:
+        """The gateway saw no browser activity for 5 minutes (it wrote heartbeat_lost)."""
+        agent.require_token(authorization)
+        return agent.abandon()
 
     return app

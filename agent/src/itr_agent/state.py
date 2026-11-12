@@ -4,10 +4,12 @@ The runbook (contract 1) is stored here and never written to disk.
 States follow docs/contracts/game-states.md; events follow docs/contracts/events.md.
 
 Two things change the game:
-- HTTP calls (claim, runbook, ack, ...), each under the lock;
+- HTTP calls (claim, runbook, ack, buttons, resolve, give up), each under the lock;
 - the background loop calling `tick()` every couple of seconds: it looks at
   Prometheus, pages when the lab's alert fires (or the fallback time passes),
-  and keeps the health bar up to date.
+  keeps the health bar up to date, runs the watch and ends the game at the
+  time limit.
+Resolve, the watch and the endings live in outcome.py.
 """
 
 import hmac
@@ -20,10 +22,12 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from itr_agent.actions import change_text, check_input, label
+from itr_agent.checks import Checker, http_status
 from itr_agent.errors import AgentError
 from itr_agent.events import EventLog
 from itr_agent.feed import Feed
 from itr_agent.observe import Observation, ServiceStatus, observe
+from itr_agent.outcome import OutcomeMixin
 from itr_agent.prometheus import Alert, PrometheusLike
 from itr_agent.runbook import validate_runbook
 from itr_agent.verbs import CommandRunner, VerbError, Verbs
@@ -38,11 +42,12 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
-class Agent:
+class Agent(OutcomeMixin):
     world: World
     runner: CommandRunner
     prometheus: PrometheusLike
     clock: Callable[[], float] = time.monotonic
+    http: Callable[[str, str], int | None] = http_status
     # Always True for now. A later step replaces this with real checks
     # (Compose up, Prometheus answering).
     booted: bool = True
@@ -51,6 +56,8 @@ class Agent:
     public_base_url: str | None = None
     state: GameState = "booting"
     severity: str = "SEV2"
+    reopened: bool = False
+    end_reason: str | None = None
     time_limit_s: int = 2400
     events: EventLog = field(default_factory=EventLog)
     feed: Feed = field(default_factory=Feed)
@@ -64,6 +71,9 @@ class Agent:
     services: list[ServiceStatus] = field(default_factory=list)
     health: int = 100
     failed_checkouts: int = 0
+    # Resolve
+    resolve_attempts: int = 0
+    wrong_resolves: int = 0
     _token: str | None = field(default=None, repr=False)
     _runbook: dict | None = field(default=None, repr=False)
     _fault_at: float | None = field(default=None, repr=False)
@@ -75,9 +85,16 @@ class Agent:
     _action_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _recent_actions: deque = field(default_factory=deque, repr=False)
     _idempotent: dict = field(default_factory=dict, repr=False)
+    _resolve_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _last_resolve_at: float | None = field(default=None, repr=False)
+    _watch_started_at: float | None = field(default=None, repr=False)
+    _next_watch_at: float = field(default=0.0, repr=False)
+    _ending: bool = field(default=False, repr=False)
+    _ended_at: float | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.verbs = Verbs(self.world, self.runner)
+        self.checker = Checker(self.world, self.runner, self.prometheus, self.http)
 
     # ----- facts -------------------------------------------------------------
 
@@ -97,10 +114,11 @@ class Agent:
         return self._runbook
 
     def game_time(self) -> int | None:
-        """Seconds since the page (t). None before the page."""
+        """Seconds since the page (t). None before the page. Stops at the end."""
         if self._paged_at is None:
             return None
-        return int(self.clock() - self._paged_at)
+        now = self._ended_at if self._ended_at is not None else self.clock()
+        return int(now - self._paged_at)
 
     # ----- control: claim and runbook ---------------------------------------
 
@@ -180,6 +198,8 @@ class Agent:
 
     def acknowledge(self) -> int:
         with self._lock:
+            if self.state == "ended" or self._ending:
+                raise AgentError(409, "game_over", "The game is over.")
             if self.state != "paged":
                 message = (
                     "There is no page to acknowledge yet."
@@ -198,7 +218,7 @@ class Agent:
     def press(self, action_id: str, given: dict[str, str], key: str) -> dict:
         """Run one button (contract 2, POST /v1/actions). Returns the ActionResult."""
         with self._lock:
-            if self.state not in PLAYING:
+            if self.state not in PLAYING or self._ending:
                 raise AgentError(409, "game_over", "The game is over.")
             now = self.clock()
             self._forget_old_keys(now)
@@ -278,16 +298,26 @@ class Agent:
 
     def tick(self) -> None:
         """One look at the world. Safe to call any time; does nothing before the runbook."""
-        if not self.runbook_loaded or self.state == "ended":
+        if not self.runbook_loaded or self.state == "ended" or self._ending:
             return
         seen = observe(self.prometheus, self.world)  # network: outside the lock
         with self._lock:
+            if self.state == "ended" or self._ending:
+                return
             self.alerts = seen.alerts
             self.services = seen.services
             if self.state == "ready":
                 self._maybe_page(seen)
             if self._paged_at is not None:
                 self._update_health(seen)
+            t = self.game_time()
+            time_up = t is not None and t >= self.time_limit_s
+            watching = self.state == "watching"
+            watch_due = watching and self.clock() >= self._next_watch_at
+        if time_up:
+            self.finish("unresolved", [("time_limit", {"watch_cut_short": watching})])
+        elif watch_due:
+            self.watch_step()
 
     def _maybe_page(self, seen: Observation) -> None:
         page = self.runbook["page"]

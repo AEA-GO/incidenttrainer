@@ -23,15 +23,35 @@ CLAIM = {
 
 
 class FakeRunner:
-    """Records commands instead of running them. Set `exit_code` to simulate failure."""
+    """Records commands instead of running them.
+
+    Set `exit_code` to simulate failure, and `outputs` to answer `ps` or `inspect`
+    (what the container checks ask Docker).
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], Path]] = []
         self.exit_code = 0
+        self.outputs: dict[str, str] = {}
 
     def run(self, argv: list[str], cwd: Path, timeout_s: int) -> CommandResult:
         self.calls.append((argv, cwd))
+        for word in ("ps", "inspect"):
+            if word in argv and word in self.outputs:
+                return CommandResult(0, self.outputs[word], 30)
         return CommandResult(self.exit_code, f"Container {argv[-1]} Recreated\n", 1200)
+
+
+class FakeHttp:
+    """Answers health checks with `status` (None = nothing answered)."""
+
+    def __init__(self) -> None:
+        self.status: int | None = 200
+        self.urls: list[str] = []
+
+    def __call__(self, url: str, method: str = "GET") -> int | None:
+        self.urls.append(url)
+        return self.status
 
 
 class FakeClock:
@@ -75,6 +95,11 @@ class FakePrometheus:
 
 
 @pytest.fixture
+def http() -> FakeHttp:
+    return FakeHttp()
+
+
+@pytest.fixture
 def clock() -> FakeClock:
     return FakeClock()
 
@@ -98,9 +123,15 @@ def runner() -> FakeRunner:
 
 @pytest.fixture
 def agent(
-    world: World, runner: FakeRunner, prometheus: FakePrometheus, clock: FakeClock
+    world: World,
+    runner: FakeRunner,
+    prometheus: FakePrometheus,
+    clock: FakeClock,
+    http: FakeHttp,
 ) -> Agent:
-    return Agent(world=world, runner=runner, prometheus=prometheus, clock=clock)
+    return Agent(
+        world=world, runner=runner, prometheus=prometheus, clock=clock, http=http
+    )
 
 
 @pytest.fixture
@@ -129,3 +160,12 @@ def started(control, push) -> None:
 
 
 PLAYER = {"X-Itr-Game-Id": GAME_ID}
+
+
+@pytest.fixture
+def investigating(started, agent, prometheus, player) -> None:
+    """Paged and acknowledged: the player is working on it. The shop is still broken."""
+    prometheus.error_rates = {"storefront": 31.0, "catalog": 30.0}
+    prometheus.fire("CheckoutErrorRateHigh", 31.0)
+    agent.tick()
+    assert player.post("/v1/ack", headers=PLAYER).status_code == 200

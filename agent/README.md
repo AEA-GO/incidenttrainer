@@ -1,11 +1,12 @@
 # itr-agent
 
-The referee on every game server: starts the fault, runs the buttons, checks whether the shop is really fixed, and writes the game diary.
-Specification: [contract 2, agent API](../docs/contracts/agent-api.yaml). Lab and world formats: [contract 1](../docs/contracts/lab-format.md). Diary: [events](../docs/contracts/events.md).
+The referee on every game server: starts the fault, pages, runs the buttons, checks whether the shop is really fixed, watches that the fix holds, ends the game, and writes the game diary.
+Specification: [contract 2, agent API](../docs/contracts/agent-api.yaml). Lab and world formats: [contract 1](../docs/contracts/lab-format.md). Diary: [events](../docs/contracts/events.md). States: [game states](../docs/contracts/game-states.md).
 
-Two web servers in one process, sharing one in-memory `Agent`:
+Two web servers in one process, sharing one in-memory `Agent`, plus a background loop:
 - **8080, player API** (`/v1/*`): reached only through the gateway.
 - **8081, control API** (`/control/v1/*`): only gateway-auth calls it; protected by the token set in `claim`.
+- **Game loop** (every `ITR_TICK_S`, default 2 s): reads Prometheus, pages, keeps the health bar, runs the watch, stops the game at the time limit.
 
 ## Run the tests
 
@@ -14,74 +15,63 @@ cd agent
 uv sync
 uv run pytest
 ```
-Tests never run Docker: a fake command runner records what would run, and verbs edit a temporary copy of the config.
+Tests never run Docker or need Prometheus: fakes stand in for commands, Prometheus, HTTP and the clock.
 
-## Play the start of a game by hand (laptop)
+## Play a game on your laptop
 
 Terminal 1, the stand-in shop (see `dev/README.md`):
 ```bash
-cd agent/dev && docker compose up -d --build
+cd agent/dev
+sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' config/catalog.env    # start healthy
+docker compose up -d
 ```
-Terminal 2, the agent pointed at that shop:
+Terminal 2, the agent pointed at that shop (restart it before every game: it keeps everything in memory, by design):
 ```bash
 cd agent
 ITR_WORLD_MANIFEST=dev/world.yaml ITR_COMPOSE_DIR=dev uv run itr-agent
 ```
-Terminal 3, act as the gateway:
+Terminal 3, you. `dev/play.py` plays both the gateway and the browser (any folder works):
 ```bash
 cd agent
-T=ttttttttttttttttttttttttttttttttttttttttttt
-curl -s localhost:8081/control/v1/ready; echo
-curl -s -X POST localhost:8081/control/v1/claim -H 'Content-Type: application/json' \
-  -d "{\"game_id\":\"q3V9xYk2Lm8Ta1BcD4eF0g\",\"token\":\"$T\",\"public_base_url\":\"http://localhost:8000\"}" -w '%{http_code}\n'
-curl -s -X PUT localhost:8081/control/v1/runbook -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $T" -d @dev/labs/dev-lab.push.json; echo
-curl -s localhost:8081/control/v1/report -H "Authorization: Bearer $T"; echo
+python3 dev/play.py start           # claim + load the dev lab; the agent breaks the shop
+python3 dev/play.py state           # repeat until PAGED (~30 s)
+python3 dev/play.py ack
+python3 dev/play.py press show-catalog-config
+python3 dev/play.py press catalog-flags flag=SEARCH_V2 value=false
+python3 dev/play.py state           # wait until storefront is OK, then about a minute more
+python3 dev/play.py resolve         # failed: what's still wrong. Passed: the watch starts (4:00)
+python3 dev/play.py state           # watch the countdown; the game ends "resolved"
+python3 dev/play.py feed            # your timeline
+python3 dev/play.py diary           # what scoring will read
 ```
-The agent turns the catalog flag on and the report shows `fault_started`. Then play as the browser:
-```bash
-G='X-Itr-Game-Id: q3V9xYk2Lm8Ta1BcD4eF0g'
-curl -s localhost:8080/v1/scene -H "$G"; echo          # fixed data: lab, services, buttons
-watch -n 2 "curl -s localhost:8080/v1/state -H '$G'"   # live: clock, page, health, service map
-curl -s -X POST localhost:8080/v1/ack -H "$G"; echo     # after the page: Acknowledge
-curl -s localhost:8081/control/v1/report -H "Authorization: Bearer $T"; echo
-```
-Within ~30 s the alert fires, the agent pages by itself (`state: paged`, `t` starts at 0, in-world time 14:20), and the health bar starts dropping. If the alert is late, the fallback pages after 90 s.
-
-Now fix it with the buttons (each click needs its own `Idempotency-Key`; repeating a key returns the first answer without running again):
-```bash
-B='Content-Type: application/json'
-curl -s -X POST localhost:8080/v1/actions -H "$G" -H "$B" -H 'Idempotency-Key: click-0001' \
-  -d '{"action_id":"show-catalog-config"}'; echo
-curl -s -X POST localhost:8080/v1/actions -H "$G" -H "$B" -H 'Idempotency-Key: click-0002' \
-  -d '{"action_id":"catalog-flags","input":{"flag":"SEARCH_V2","value":"false"}}'; echo
-```
-Each answer has the exact `command` and its `output`. Within about a minute the service map turns `OK` and the alert clears; `/v1/state` shows the result in `feed` and your change at the top of `changes`.
-Reset afterwards: `sed -i 's/^SEARCH_V2=.*/SEARCH_V2=false/' dev/config/catalog.env && docker compose -f dev/compose.yaml up -d catalog`. Restart the agent to play again (a server is claimed once).
+Other moves: `press restart-catalog` (it won't help: the flag stays on), `give-up`.
+Watch it play itself: `python3 dev/play.py auto --watch 30` (a whole expert game in about 2.5 minutes; `--watch` shortens the watch for demos).
 
 ## Layout
 
 | File | What |
 | --- | --- |
-| `main.py` | starts both servers; reads the world manifest; JSON logs with `game_id` on every line |
-| `state.py` | the `Agent`: everything it remembers, in memory only (the runbook too) |
-| `control.py` | port 8081: ready, claim, runbook, report |
-| `player.py` | port 8080: scene, state, ack, actions |
-| `actions.py` | buttons: input checks, labels, recent-change text, runbook checks |
-| `feed.py` | the player's timeline (cursor-based) |
+| `main.py` | starts both servers and the game loop; reads the world manifest; JSON logs with `game_id` on every line |
+| `state.py` | the `Agent`: everything it remembers, in memory only (the runbook too); claim, runbook, ack, buttons, the loop |
+| `outcome.py` | Resolve, the watch, reopen at SEV1, every way a game ends, damage checks |
+| `checks.py` | the 8 check verbs; "no data" is never healthy |
+| `control.py` | port 8081: ready, claim, runbook, report, end |
+| `player.py` | port 8080: scene, state, ack, actions, resolve, give-up |
 | `views.py` | what the player sees (never hidden fields) |
+| `actions.py` | buttons: input checks, labels, recent-change text, runbook checks |
+| `verbs.py` | real commands (no shell, checked inputs); shows the player a readable command |
 | `observe.py` | one look at the shop: alerts, failed checkouts, service colours |
 | `prometheus.py` | Prometheus API client (no data rather than errors) |
 | `world.py` | reads the world manifest |
 | `runbook.py` | checks a runbook fits this world before accepting it |
-| `verbs.py` | real commands (no shell, checked inputs); shows the player a readable command |
 | `events.py` | the game diary |
+| `feed.py` | the player's timeline (cursor-based) |
 | `errors.py` | one error shape for everything |
 
 `dev/labs/dev-lab.yaml` is a fictional lab for the stand-in shop; `dev-lab.push.json` is what the gateway would send for it (generated from the YAML; `itr-lab split` will generate it once the engine has it).
 
 ## Status
 
-Steps 1–5 of 7: ports, claim with token, runbook in memory, the fault really runs (`set_config`, `set_flag`), diary + report, background loop (every `ITR_TICK_S`, default 2 s) that pages from the real alert or the fallback, game clock and in-world time, Acknowledge, health bar from failed checkouts, service map colours, firing alerts.
-Step 5: buttons (`POST /v1/actions`) for restart, rollback, scale, set_config, set_flag, clear_logs, show_config, show_status, show_versions; exact command + output; `action` event with the hidden `risky` flag; feed and recent changes; one action at a time, 30 a minute, Idempotency-Key.
-Next: checks and Resolve with the watch, end of game.
+The 7 skeleton steps are done: claim, runbook, fault, page, clock, Acknowledge, health bar, service map, buttons, Resolve, watch, reopen, endings, damage checks, diary.
+
+Still to add before the beta: chat with Dana and Sam (scripted messages, replies, chasing), status updates and the status page, hints, starting Grafana with the game's sub-path at claim, real boot checks for `ready`, the terminal (ttyd) for Junior labs, `view` events.
