@@ -5,7 +5,7 @@ The gateway strips /s/<game_id>/api and adds X-Itr-Game-Id from the checked cook
 
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, Query
+from fastapi import Depends, FastAPI, Header, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from itr_agent.errors import AgentError, install_error_handlers
@@ -26,6 +26,13 @@ class ActionRequest(BaseModel):
     input: dict[str, str] = Field(default_factory=dict)
 
 
+class ChatReplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message_id: str = Field(max_length=60)
+    option_id: str = Field(pattern=r"^[a-z]$")
+
+
 def build_player_app(agent: Agent) -> FastAPI:
     app = FastAPI(
         title="itr-agent player", docs_url=None, redoc_url=None, openapi_url=None
@@ -42,11 +49,11 @@ def build_player_app(agent: Agent) -> FastAPI:
 
     @app.get("/v1/scene", dependencies=guards)
     def scene() -> dict:
-        return scene_view(agent)
+        return agent.read(scene_view)
 
     @app.get("/v1/state", dependencies=guards)
     def state(feed_after: Annotated[int, Query(ge=0)] = 0) -> dict:
-        return state_view(agent, feed_after)
+        return agent.read(lambda a: state_view(a, feed_after))
 
     @app.post("/v1/ack", dependencies=guards)
     def ack() -> dict:
@@ -59,6 +66,12 @@ def build_player_app(agent: Agent) -> FastAPI:
     ) -> dict:
         """Press a button. Repeating the same Idempotency-Key never runs it twice."""
         return agent.press(body.action_id, body.input, idempotency_key)
+
+    @app.post("/v1/chat/replies", status_code=204, dependencies=guards)
+    def chat_reply(body: ChatReplyRequest) -> Response:
+        """Answer Dana or Sam. The character's reaction arrives in the feed."""
+        agent.reply(body.message_id, body.option_id)
+        return Response(status_code=204)
 
     @app.post("/v1/resolve", dependencies=guards)
     def resolve() -> dict:

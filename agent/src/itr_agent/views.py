@@ -6,19 +6,13 @@ player shouldn't see before the end.
 """
 
 from itr_agent.actions import label
+from itr_agent.clocks import scene_clock
 from itr_agent.state import Agent
 
 CHARACTERS = [
     {"id": "dana", "name": "Dana", "role": "Product"},
     {"id": "sam", "name": "Sam", "role": "Support"},
 ]
-
-
-def scene_clock(starts_at: str, t: int) -> str:
-    """In-world time: the scene's start (HH:MM) plus game time."""
-    hours, minutes = (int(part) for part in starts_at.split(":"))
-    total = (hours * 60 + minutes + t // 60) % (24 * 60)
-    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 def button(action: dict) -> dict:
@@ -128,6 +122,7 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
             "last_update_t": None,
             "next_update_at": None,
         },
-        # Button results and notices; chat messages come with the chat feature.
+        # Chat messages (with reply buttons until answered), your replies,
+        # button results and notices, in order.
         "feed": {"cursor": agent.feed.cursor, "items": agent.feed.since(feed_after)},
     }

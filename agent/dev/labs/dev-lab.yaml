@@ -54,6 +54,29 @@ chat:
         - {id: a, tone: honest, text: "Investigating, about a third of checkouts fail. Next update by 14:35.", reaction: "Thanks, I'll tell customers we're on it."}
         - {id: b, tone: overconfident, text: "Should be fixed in 5 minutes.", reaction: "Great, I'll say 5 minutes."}
         - {id: c, tone: deflecting, text: "Not sure yet, looking into it.", reaction: "OK... what do I tell people meanwhile?"}
+    - id: dana-1
+      from: dana
+      when: {trigger: acknowledged, delay_s: 20}
+      text: "Saw the page. Any ETA? Marketing email goes out at 15:00."
+      replies:
+        - {id: a, tone: honest, text: "No ETA yet. I'll update you by 14:35.", reaction: "OK, holding the email for now."}
+        - {id: b, tone: overconfident, text: "Should be fixed in 5 minutes.", reaction: "Perfect, sending it as planned."}
+    - id: sam-restart
+      from: sam
+      when: {trigger: action, match: {verb: restart}, delay_s: 30}
+      text: "Customers still say checkout fails."
+    - id: dana-watch
+      from: dana
+      when: {trigger: resolve_passed, delay_s: 5}
+      text: "Sam says tickets stopped. Is it fixed? Can I send the email?"
+      replies:
+        - {id: a, tone: honest, text: "Looks fixed. I'm watching it for a few minutes before I call it done.", reaction: "OK, I'll wait for your all-clear."}
+        - {id: b, tone: overconfident, text: "Yes, all fixed. Send it.", reaction: "Sending it now!"}
+        - {id: c, tone: deflecting, text: "Ask me later.", reaction: "...OK."}
+    - id: sam-reopen
+      from: sam
+      when: {trigger: reopened, delay_s: 10}
+      text: "Tickets are coming in again. Is checkout broken again?"
   chase:
     overdue: {from: dana, text: "You said {promised}. Any news?"}
     silence: {from: sam, after_s: 600, text: "Customers keep asking. Anything I can tell them?"}

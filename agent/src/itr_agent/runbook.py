@@ -6,6 +6,7 @@ service and alert exists, every verb is one it can run.
 """
 
 from itr_agent.actions import problems_with_actions
+from itr_agent.chat import problems_with_chat
 from itr_agent.checks import CHECK_VERBS
 from itr_agent.verbs import SUPPORTED_FAULT_VERBS
 from itr_agent.world import World
@@ -54,6 +55,7 @@ def validate_runbook(runbook: dict, world: World) -> list[str]:
             )
     problems += problems_with_actions(runbook["actions"], world)
     problems += problems_with_checks(runbook["checks"], world)
+    problems += problems_with_chat(runbook["chat"], world)
     return problems
 
 
