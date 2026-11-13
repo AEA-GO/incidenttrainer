@@ -17,6 +17,7 @@ Checks can take seconds, so they never run while holding the lock.
 import logging
 
 from itr_agent.checks import CheckResult
+from itr_agent.clocks import clock_text
 from itr_agent.errors import AgentError
 
 PENALTY = 2
@@ -29,10 +30,6 @@ END_NOTICES = {
     "abandoned": "The game ended: no activity for 5 minutes.",
 }
 log = logging.getLogger(__name__)
-
-
-def clock_text(seconds: int) -> str:
-    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 class OutcomeMixin:
@@ -95,6 +92,7 @@ class OutcomeMixin:
         self.feed.add(
             "notice", t, level="error", text="Not resolved yet: " + " ".join(messages)
         )
+        self.chat.trigger("resolve_failed", t)
         return {
             "result": "failed",
             "attempt": self.resolve_attempts,
@@ -119,6 +117,7 @@ class OutcomeMixin:
             level="info",
             text=f"Checks pass. Watching for {clock_text(seconds)} to make sure the fix holds.",
         )
+        self.chat.trigger("resolve_passed", t)
         log.info("resolve passed; watching for %s s", seconds)
         return {
             "result": "passed",
@@ -175,6 +174,7 @@ class OutcomeMixin:
         self.feed.add(
             "notice", t, level="error", text=text + " ".join(r.message for r in failing)
         )
+        self.chat.trigger("reopened", t)
         log.info("reopened at SEV1")
 
     # ----- endings -------------------------------------------------------------

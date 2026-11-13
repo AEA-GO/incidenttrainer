@@ -7,9 +7,11 @@ Plays both roles the browser and the gateway will have later:
     python3 dev/play.py ack
     python3 dev/play.py press show-catalog-config
     python3 dev/play.py press catalog-flags flag=SEARCH_V2 value=false
+    python3 dev/play.py chat               # messages from Dana and Sam, with reply options
+    python3 dev/play.py reply sam-1 a      # answer a message
     python3 dev/play.py resolve
     python3 dev/play.py give-up
-    python3 dev/play.py feed               # the timeline: button results, notices
+    python3 dev/play.py feed               # the timeline: chat, button results, notices
     python3 dev/play.py diary              # the game diary (what scoring will read)
     python3 dev/play.py auto               # play a whole game like an expert
 
@@ -37,6 +39,9 @@ TOKEN = "t" * 43
 PUSH = Path(__file__).resolve().parent / "labs" / "dev-lab.push.json"
 STARTED = time.monotonic()
 TIMESTAMPS = False  # only `auto` prints elapsed time
+NAMES = {"dana": "Dana", "sam": "Sam", "you": "You"}
+# The expert's answers in `auto`: the honest reply to each message (dev lab only).
+EXPERT_REPLIES = {"sam-1": "a", "dana-1": "a", "dana-watch": "a"}
 
 
 # ----- HTTP ---------------------------------------------------------------------
@@ -109,6 +114,14 @@ def start(watch: int | None = None) -> None:
     say("Game started. The agent has broken the shop; wait for the page.")
 
 
+def when(t: int | None) -> str:
+    return "before the page" if t is None else f"t={t}s"
+
+
+def waiting_for_reply(s: dict) -> list[dict]:
+    return [i for i in s.get("feed", {}).get("items", []) if i.get("replies")]
+
+
 def bar(value: int) -> str:
     filled = round(value / 10)
     return "#" * filled + "-" * (10 - filled)
@@ -146,6 +159,10 @@ def show_state() -> dict:
         )
         print(
             f"  change   {change['service']}: {change['text']} (by {change['by']}, {when})"
+        )
+    for message in waiting_for_reply(s):
+        print(
+            f"  chat     {NAMES[message['from']]} is waiting for a reply (play.py chat)"
         )
     resolve = s["resolve"]
     if resolve["attempts"]:
@@ -193,6 +210,37 @@ def resolve() -> dict:
     return body
 
 
+def show_chat() -> None:
+    _, s = player("GET", "/v1/state")
+    for item in s.get("feed", {}).get("items", []):
+        if item["kind"] not in ("chat_message", "chat_reply"):
+            continue
+        print(f"{when(item['t']):>8}  {NAMES[item['from']]}: {item['text']}")
+        for option in item.get("replies", []):
+            print(f"{'':>10}[{option['id']}] {option['text']}")
+        if item.get("replies"):
+            print(
+                f"{'':>10}answer: python3 dev/play.py reply {item['message_id']} <letter>"
+            )
+
+
+def reply(message_id: str, option_id: str) -> bool:
+    """Answer a message; print what you said and the character's reaction."""
+    status, body = player(
+        "POST", "/v1/chat/replies", {"message_id": message_id, "option_id": option_id}
+    )
+    if status != 204:
+        say(error_text(body))
+        return False
+    _, s = player("GET", "/v1/state")
+    for item in s.get("feed", {}).get("items", []):
+        if item.get("message_id") == message_id and item["kind"] == "chat_reply":
+            say(f"You: {item['text']}")
+        if item.get("message_id") == f"{message_id}-r":
+            say(f"{NAMES[item['from']]}: {item['text']}")
+    return True
+
+
 def give_up() -> None:
     status, body = player("POST", "/v1/give-up", {"confirm": True})
     say("You ended the game." if status == 200 else error_text(body))
@@ -201,9 +249,11 @@ def give_up() -> None:
 def feed() -> None:
     _, s = player("GET", "/v1/state")
     for item in s.get("feed", {}).get("items", []):
-        t = f"t={item['t']}s" if item["t"] is not None else "before the page"
+        t = when(item["t"])
         if item["kind"] == "action_result":
             print(f"{t:>16}  {item['result']['label']}: $ {item['result']['command']}")
+        elif item["kind"] in ("chat_message", "chat_reply"):
+            print(f"{t:>16}  {NAMES[item['from']]}: {item['text']}")
         else:
             print(f"{t:>16}  {item.get('level', '')}: {item.get('text', '')}")
 
@@ -226,14 +276,32 @@ def diary() -> list[dict]:
 # ----- auto: an expert's game ---------------------------------------------------------
 
 
+def answer_chat(s: dict) -> None:
+    """The expert answers every message honestly, as soon as it arrives."""
+    for message in waiting_for_reply(s):
+        say(f"{NAMES[message['from']]}: {message['text']}")
+        option_id = EXPERT_REPLIES.get(
+            message["message_id"], message["replies"][0]["id"]
+        )
+        reply(message["message_id"], option_id)
+
+
 def wait_for(what: str, condition, timeout_s: int, every_s: int = 3) -> dict:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         _, s = player("GET", "/v1/state")
+        if s.get("state") in ("paged", "investigating", "watching"):
+            answer_chat(s)
         if condition(s):
             return s
         time.sleep(every_s)
     sys.exit(f"Gave up waiting for {what}.")
+
+
+def pause(seconds: int) -> None:
+    """Wait, but keep answering the chat."""
+    end = time.monotonic() + seconds
+    wait_for("nothing", lambda _: time.monotonic() >= end, seconds + 10)
 
 
 def service_ok(s: dict, name: str) -> bool:
@@ -254,11 +322,11 @@ def auto(watch: int | None) -> None:
     press("catalog-flags", ["flag=SEARCH_V2", "value=false"])
     wait_for("storefront to recover", lambda s: service_ok(s, "storefront"), 180)
     say("Storefront looks OK. Waiting for a clean minute before resolving.")
-    time.sleep(45)
+    pause(45)
     for _ in range(4):
         if resolve().get("result") == "passed":
             break
-        time.sleep(15)
+        pause(15)
     seconds = (
         watch or json.loads(PUSH.read_text())["runbook"]["checks"]["watch"]["seconds"]
     )
@@ -282,8 +350,11 @@ def main() -> None:
     for name in ("start", "auto"):
         sub = commands.add_parser(name)
         sub.add_argument("--watch", type=int, help="watch length in seconds (demo)")
-    for name in ("state", "ack", "resolve", "give-up", "feed", "diary"):
+    for name in ("state", "ack", "chat", "resolve", "give-up", "feed", "diary"):
         commands.add_parser(name)
+    reply_parser = commands.add_parser("reply")
+    reply_parser.add_argument("message_id")
+    reply_parser.add_argument("option_id", help="the reply's letter, e.g. a")
     press_parser = commands.add_parser("press")
     press_parser.add_argument("action")
     press_parser.add_argument("input", nargs="*", help="key=value")
@@ -295,10 +366,13 @@ def main() -> None:
         auto(args.watch)
     elif args.command == "press":
         press(args.action, args.input)
+    elif args.command == "reply":
+        reply(args.message_id, args.option_id)
     else:
         {
             "state": show_state,
             "ack": ack,
+            "chat": show_chat,
             "resolve": resolve,
             "give-up": give_up,
             "feed": feed,

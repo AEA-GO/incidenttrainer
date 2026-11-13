@@ -17,8 +17,13 @@ class Feed:
         self.items.append(item)
         return item
 
+    def remove_field(self, item_id: int, key: str) -> None:
+        """E.g. a chat message's reply buttons, once the player has answered."""
+        self.items[item_id - 1].pop(key, None)
+
     def since(self, after: int = 0, limit: int = 100) -> list[dict]:
-        return [item for item in self.items if item["id"] > after][:limit]
+        """Copies, so a later change never alters an answer already handed out."""
+        return [dict(item) for item in self.items if item["id"] > after][:limit]
 
     @property
     def cursor(self) -> int:

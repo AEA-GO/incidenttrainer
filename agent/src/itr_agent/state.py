@@ -4,12 +4,13 @@ The runbook (contract 1) is stored here and never written to disk.
 States follow docs/contracts/game-states.md; events follow docs/contracts/events.md.
 
 Two things change the game:
-- HTTP calls (claim, runbook, ack, buttons, resolve, give up), each under the lock;
+- HTTP calls (claim, runbook, ack, buttons, chat replies, resolve, give up), each
+  under the lock;
 - the background loop calling `tick()` every couple of seconds: it looks at
   Prometheus, pages when the lab's alert fires (or the fallback time passes),
-  keeps the health bar up to date, runs the watch and ends the game at the
-  time limit.
-Resolve, the watch and the endings live in outcome.py.
+  keeps the health bar up to date, sends chat messages that are due, runs the
+  watch and ends the game at the time limit.
+Resolve, the watch and the endings live in outcome.py; Dana and Sam in chat.py.
 """
 
 import hmac
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from itr_agent.actions import change_text, check_input, label
+from itr_agent.chat import Chat
 from itr_agent.checks import Checker, http_status
 from itr_agent.errors import AgentError
 from itr_agent.events import EventLog
@@ -71,6 +73,8 @@ class Agent(OutcomeMixin):
     services: list[ServiceStatus] = field(default_factory=list)
     health: int = 100
     failed_checkouts: int = 0
+    # Dana and Sam; created with the runbook
+    chat: Chat | None = None
     # Resolve
     resolve_attempts: int = 0
     wrong_resolves: int = 0
@@ -112,6 +116,11 @@ class Agent(OutcomeMixin):
         if self._runbook is None:
             raise AgentError(409, "not_ready", "The game hasn't started yet.")
         return self._runbook
+
+    def read(self, view: Callable[["Agent"], dict]) -> dict:
+        """Build a player view under the lock, so the loop can't change the game halfway."""
+        with self._lock:
+            return view(self)
 
     def game_time(self) -> int | None:
         """Seconds since the page (t). None before the page. Stops at the end."""
@@ -189,6 +198,9 @@ class Agent(OutcomeMixin):
                     )
 
             self._runbook = runbook
+            self.chat = Chat(
+                runbook["chat"], self.events, self.feed, runbook["scene"]["starts_at"]
+            )
             self.time_limit_s = time_limit_s
             self.state = "ready"
             self._fault_at = self.clock()
@@ -211,7 +223,17 @@ class Agent(OutcomeMixin):
             self.acknowledged_t = t
             self.state = "investigating"
             self.events.add("acknowledged", t=t)
+            self.chat.trigger("acknowledged", t)
             return t
+
+    # ----- player: chat ---------------------------------------------------------
+
+    def reply(self, message_id: str, option_id: str) -> None:
+        """Pick one of the replies a chat message offers (contract 2, /v1/chat/replies)."""
+        with self._lock:
+            if self.state == "ended" or self._ending:
+                raise AgentError(409, "game_over", "The game is over.")
+            self.chat.reply(message_id, option_id, self.game_time())
 
     # ----- player: buttons -----------------------------------------------------
 
@@ -276,6 +298,7 @@ class Agent(OutcomeMixin):
                     0, {"t": t, "service": action["target"], "text": text, "by": "you"}
                 )
             self._idempotent[key] = (self.clock(), response)
+            self.chat.trigger("action", t, verb=action["verb"], target=action["target"])
             log.info("action %s -> exit %s", action_id, result.exit_code)
             return response
 
@@ -310,6 +333,7 @@ class Agent(OutcomeMixin):
                 self._maybe_page(seen)
             if self._paged_at is not None:
                 self._update_health(seen)
+                self.chat.deliver(self.game_time())
             t = self.game_time()
             time_up = t is not None and t >= self.time_limit_s
             watching = self.state == "watching"

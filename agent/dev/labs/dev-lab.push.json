@@ -83,6 +83,79 @@
           "when": {
             "at": 60
           }
+        },
+        {
+          "from": "dana",
+          "id": "dana-1",
+          "replies": [
+            {
+              "id": "a",
+              "reaction": "OK, holding the email for now.",
+              "text": "No ETA yet. I'll update you by 14:35.",
+              "tone": "honest"
+            },
+            {
+              "id": "b",
+              "reaction": "Perfect, sending it as planned.",
+              "text": "Should be fixed in 5 minutes.",
+              "tone": "overconfident"
+            }
+          ],
+          "text": "Saw the page. Any ETA? Marketing email goes out at 15:00.",
+          "when": {
+            "delay_s": 20,
+            "trigger": "acknowledged"
+          }
+        },
+        {
+          "from": "sam",
+          "id": "sam-restart",
+          "text": "Customers still say checkout fails.",
+          "when": {
+            "delay_s": 30,
+            "match": {
+              "verb": "restart"
+            },
+            "trigger": "action"
+          }
+        },
+        {
+          "from": "dana",
+          "id": "dana-watch",
+          "replies": [
+            {
+              "id": "a",
+              "reaction": "OK, I'll wait for your all-clear.",
+              "text": "Looks fixed. I'm watching it for a few minutes before I call it done.",
+              "tone": "honest"
+            },
+            {
+              "id": "b",
+              "reaction": "Sending it now!",
+              "text": "Yes, all fixed. Send it.",
+              "tone": "overconfident"
+            },
+            {
+              "id": "c",
+              "reaction": "...OK.",
+              "text": "Ask me later.",
+              "tone": "deflecting"
+            }
+          ],
+          "text": "Sam says tickets stopped. Is it fixed? Can I send the email?",
+          "when": {
+            "delay_s": 5,
+            "trigger": "resolve_passed"
+          }
+        },
+        {
+          "from": "sam",
+          "id": "sam-reopen",
+          "text": "Tickets are coming in again. Is checkout broken again?",
+          "when": {
+            "delay_s": 10,
+            "trigger": "reopened"
+          }
         }
       ]
     },
