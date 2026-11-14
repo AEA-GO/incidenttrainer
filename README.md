@@ -1,4 +1,4 @@
-# IncidentTrainer
+# IncidentTrainer (working title)
 
 A browser game where you play the on-call engineer: a real server breaks, you find and fix the cause, keep people informed, and get scored.
 
