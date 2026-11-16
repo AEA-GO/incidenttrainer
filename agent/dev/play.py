@@ -16,6 +16,7 @@ Plays both roles the browser and the gateway will have later:
     python3 dev/play.py auto               # play a whole game like an expert
 
 `start --watch 30` and `auto --watch 30` shorten the watch (normally 4:00) for demos.
+`start --push FILE` plays another lab: a push file made by the labs repo's make_push.py.
 The agent forgets everything when restarted: restart it before each new game.
 """
 
@@ -88,7 +89,7 @@ def say(text: str) -> None:
 # ----- commands ------------------------------------------------------------------
 
 
-def start(watch: int | None = None) -> None:
+def start(watch: int | None = None, push_file: Path = PUSH) -> None:
     _, ready = call("GET", CONTROL + "/control/v1/ready")
     if ready.get("claimed"):
         sys.exit(
@@ -105,7 +106,7 @@ def start(watch: int | None = None) -> None:
     )
     if status != 204:
         sys.exit(f"claim failed: {error_text(body)}")
-    push = json.loads(PUSH.read_text())
+    push = json.loads(push_file.read_text())
     if watch:
         push["runbook"]["checks"]["watch"]["seconds"] = watch
     status, body = control("PUT", "/control/v1/runbook", push)
@@ -350,6 +351,10 @@ def main() -> None:
     for name in ("start", "auto"):
         sub = commands.add_parser(name)
         sub.add_argument("--watch", type=int, help="watch length in seconds (demo)")
+        if name == "start":
+            sub.add_argument(
+                "--push", type=Path, default=PUSH, help="push file of the lab to play"
+            )
     for name in ("state", "ack", "chat", "resolve", "give-up", "feed", "diary"):
         commands.add_parser(name)
     reply_parser = commands.add_parser("reply")
@@ -361,7 +366,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "start":
-        start(args.watch)
+        start(args.watch, args.push)
     elif args.command == "auto":
         auto(args.watch)
     elif args.command == "press":
