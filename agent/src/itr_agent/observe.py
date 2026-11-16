@@ -25,11 +25,14 @@ class Observation:
 
 
 def service_status(
-    name: str, error_rate: float | None, down: bool, world: World
+    name: str, error_rate: float | None, down: bool, world: World, kind: str = "app"
 ) -> ServiceStatus:
     rules = world.status
     if down:
         return ServiceStatus(name, "down", "DOWN", "not answering")
+    if kind != "app":
+        # Databases and caches have no request error rate: up unless ServiceDown fires.
+        return ServiceStatus(name, "ok", "OK", "")
     if error_rate is None:
         return ServiceStatus(name, "unknown", "NO DATA", "")
     detail = f"errors {error_rate:.0f}%"
@@ -55,6 +58,10 @@ def observe(prometheus: PrometheusLike, world: World) -> Observation:
                 world.metrics["error_rate"], service.name, None, world.status.window_s
             )
             rate = prometheus.scalar(query)
-        services.append(service_status(service.name, rate, service.name in down, world))
+        services.append(
+            service_status(
+                service.name, rate, service.name in down, world, service.kind
+            )
+        )
     failed = prometheus.scalar(world.metrics["failed_checkouts_total"])
     return Observation(alerts=alerts, failed_checkouts_total=failed, services=services)
