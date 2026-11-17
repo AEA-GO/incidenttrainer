@@ -61,6 +61,17 @@ variable "github_org_id" {
   default     = "353076408"
 }
 
+variable "labs_repo" {
+  description = "Private labs repository whose image job may build AMIs."
+  type        = string
+  default     = "incidenttrainer-labs"
+}
+
+variable "labs_repo_id" {
+  description = "Numeric GitHub id of the labs repo (private, so it goes in terraform.tfvars; see README)."
+  type        = string
+}
+
 variable "github_repo_id" {
   description = "Numeric GitHub id of the platform repo; GitHub puts it in the OIDC subject."
   type        = string

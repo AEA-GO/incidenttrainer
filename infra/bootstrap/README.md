@@ -7,6 +7,7 @@ applied by hand (first time, and when it changes); everything else is applied by
 | --- | --- | --- |
 | S3 bucket `itr-tfstate-<account>` (versioning, encryption, native locking) | Terraform state for all stacks | Cents |
 | GitHub OIDC provider, roles `itr-gha-plan` and `itr-gha-apply` | CI signs in without stored keys | Free |
+| Role `itr-gha-image` (images.tf) | The labs repo's image job builds server images with Packer; only its `main` branch may use it | Free (builds ~2 cents each) |
 | Policy `itr-guardrails` | Region, instance-size and cost limits without AWS Organizations | Free |
 | Groups `admins`, `developers` | People | Free |
 | Budget `itr-monthly`: alerts at $25 / $40 / $50 actual, $50 forecast | No surprises | Free (first 2 budgets) |
@@ -36,6 +37,7 @@ terraform apply bootstrap.plan
    `terraform init -migrate-state`, answer `yes`, delete the local `terraform.tfstate*` files.
 3. GitHub → AEA-GO/incidenttrainer → Settings → Secrets and variables → Actions → **Variables**
    (ARNs are not secret): `AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN` from `terraform output ci_role_arns`.
+   In the labs repo: `AWS_IMAGE_ROLE_ARN` from `terraform output image_role_arn`, and `AWS_REGION=eu-central-1`.
 4. GitHub → Settings → Environments → create `main`, allow only the `main` branch.
 5. Add yourself to the `admins` group, then detach the AdministratorAccess policy from your user.
 6. Test the alert path:

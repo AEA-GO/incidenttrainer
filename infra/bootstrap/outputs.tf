@@ -8,6 +8,11 @@ output "ci_role_arns" {
   value       = { for name, role in aws_iam_role.ci : name => role.arn }
 }
 
+output "image_role_arn" {
+  description = "Store in the labs repo as the GitHub Actions variable AWS_IMAGE_ROLE_ARN."
+  value       = aws_iam_role.image.arn
+}
+
 output "alerts_topic_arn" {
   description = "Other stacks send CloudWatch alarms here."
   value       = aws_sns_topic.alerts.arn
