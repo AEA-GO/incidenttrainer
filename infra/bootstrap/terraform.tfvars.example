@@ -9,3 +9,8 @@ existing_anomaly_monitor_arn = "arn:aws:ce::557541683274:anomalymonitor/..."
 
 # Only if `aws iam list-open-id-connect-providers` already shows token.actions.githubusercontent.com:
 # existing_github_oidc_provider_arn = "arn:aws:iam::557541683274:oidc-provider/token.actions.githubusercontent.com"
+
+# The labs repo's numeric id (it is private, so it stays out of Git). Find it with
+#   gh api repos/AEA-GO/incidenttrainer-labs --jq .id
+# or open the repo on github.com, view the page source and search "repository_id".
+labs_repo_id = "NNNNNNNNNN"

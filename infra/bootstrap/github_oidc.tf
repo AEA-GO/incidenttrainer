@@ -1,7 +1,7 @@
 # GitHub Actions signs in with OIDC; no AWS keys are stored in GitHub.
 # itr-gha-plan : pull requests and pushes to main (read-only, plus the state lock file)
 # itr-gha-apply: only jobs that run in the GitHub environment "main"
-# A role for the labs repo's publish job is added later, when that job exists.
+# itr-gha-image: the labs repo's image job (images.tf). The labs publish job gets its own role later.
 
 resource "aws_iam_openid_connect_provider" "github" {
   count          = var.existing_github_oidc_provider_arn == "" ? 1 : 0
