@@ -1,6 +1,6 @@
 # CI for every pull request and every push to main.
 #   checks          : pre-commit on all files (format, ruff, terraform fmt, ...), same tool versions as laptops (mise.toml),
-#                     then the API's tests
+#                     then the API's, the agent's and the gateway's tests
 #   secrets         : gitleaks over the whole git history
 #   aws-sign-in     : proves GitHub can sign in to AWS with OIDC (read-only plan role)
 #   terraform-plan  : PRs only: plans infra/envs/main with the read-only role and posts the plan on the PR
@@ -55,6 +55,12 @@ jobs:
       - name: Agent tests
         working-directory: agent
         run: uv run --frozen pytest
+
+      - name: Gateway tests (with the real nginx config)
+        working-directory: gateway
+        run: |
+          command -v nginx || { sudo apt-get update -q && sudo apt-get install -y -q nginx-core; }
+          uv run --frozen pytest
 
   secrets:
     name: secrets

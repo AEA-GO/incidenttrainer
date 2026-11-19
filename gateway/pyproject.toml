@@ -1,0 +1,28 @@
+[project]
+name = "itr-gateway"
+version = "0.1.0"
+description = "IncidentTrainer gateway-auth: checks the game cookie and routes /s/<game_id>/* to the player's game server"
+readme = "README.md"
+authors = [
+    { name = "Andrii Danchylo", email = "133139212+danchylo@users.noreply.github.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "boto3>=1.44.6",
+    "fastapi>=0.165.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+itr-gateway-auth = "itr_gateway:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.2",
+    "moto[dynamodb]>=5.2.5",
+    "pytest>=9.2.0",
+]
