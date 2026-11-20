@@ -3,8 +3,12 @@
 # /etc/itr-gateway.env by user data at boot; AWS access comes from the instance role.
 [Unit]
 Description=IncidentTrainer gateway-auth
+# cloud-init writes /etc/itr-gateway.env in its network stage, which runs before
+# network-online.target. Never order after cloud-init.target: that waits for cloud-final,
+# which waits for multi-user.target, which waits for this unit (an ordering cycle; systemd
+# then silently drops this start).
 Wants=network-online.target
-After=network-online.target cloud-init.target
+After=network-online.target
 Before=nginx.service
 
 [Service]
