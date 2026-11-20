@@ -1,0 +1,34 @@
+# gateway-auth: cookie checks for nginx (127.0.0.1:9000) and the session broker.
+# Its settings (ITR_TABLE, ITR_LAB_BUCKET, ITR_PUBLIC_ORIGIN, AWS_REGION) are written to
+# /etc/itr-gateway.env by user data at boot; AWS access comes from the instance role.
+[Unit]
+Description=IncidentTrainer gateway-auth
+Wants=network-online.target
+After=network-online.target cloud-init.target
+Before=nginx.service
+
+[Service]
+User=itr-gateway
+Group=itr-gateway
+EnvironmentFile=/etc/itr-gateway.env
+ExecStart=/opt/itr-gateway/venv/bin/itr-gateway-auth
+Restart=always
+RestartSec=3
+MemoryMax=400M
+
+# It needs nothing on disk but its own code and the network.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

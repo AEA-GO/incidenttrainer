@@ -1,0 +1,106 @@
+# Builds the gateway image when gateway-auth, its nginx config or the image changes.
+# Pull requests: checks only (no AWS). Main and manual runs: build (~10 min), publish the
+# AMI id in SSM /itr/gateway/ami, put it on the running gateway by swapping its root disk
+# (one reboot, ~1-2 min of /s/* downtime; deploy.sh), keep the newest 2 images.
+name: gateway-image
+
+on:
+  pull_request:
+    paths:
+      - "gateway/src/**"
+      - "gateway/nginx/**"
+      - "gateway/image/**"
+      - "gateway/pyproject.toml"
+      - "gateway/uv.lock"
+      - ".github/workflows/gateway-image.yml"
+      - "!gateway/image/README.md"
+  push:
+    branches: [main]
+    paths:
+      - "gateway/src/**"
+      - "gateway/nginx/**"
+      - "gateway/image/**"
+      - "gateway/pyproject.toml"
+      - "gateway/uv.lock"
+      - ".github/workflows/gateway-image.yml"
+      - "!gateway/image/README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-image
+  cancel-in-progress: false
+
+env:
+  PACKER_VERSION: "1.16.0"
+  TEMPLATE: gateway/image/gateway.pkr.hcl
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-packer@v3
+        with:
+          version: ${{ env.PACKER_VERSION }}
+      - name: Check the template and scripts
+        run: |
+          packer fmt -check gateway/image
+          packer init "$TEMPLATE"
+          packer validate -syntax-only "$TEMPLATE"
+          shellcheck gateway/image/*.sh
+
+  build:
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: main # the apply role trusts only jobs in this environment
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-packer@v3
+        with:
+          version: ${{ env.PACKER_VERSION }}
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Pack gateway/
+        run: git archive --format=tar.gz -o "$RUNNER_TEMP/gateway.tgz" HEAD:gateway
+      - name: Build the image (~10 min)
+        # AWS sometimes has no capacity left in one zone: then try the next zone.
+        # Any other failure stops at once.
+        run: |
+          packer init "$TEMPLATE"
+          for zone in "${AWS_REGION}b" "${AWS_REGION}c" "${AWS_REGION}a"; do
+            echo "::notice::Building in $zone"
+            set +e
+            packer build -color=false \
+              -var "app_archive=$RUNNER_TEMP/gateway.tgz" \
+              -var "build_ref=$GITHUB_SHA" \
+              -var "availability_zone=$zone" \
+              "$TEMPLATE" 2>&1 | tee "$RUNNER_TEMP/packer.log"
+            status=${PIPESTATUS[0]}
+            set -e
+            [ "$status" -eq 0 ] && exit 0
+            grep -q InsufficientInstanceCapacity "$RUNNER_TEMP/packer.log" || exit "$status"
+            echo "::warning::No capacity in $zone, trying the next zone"
+          done
+          exit 1
+      - name: Publish the image id
+        id: publish
+        run: |
+          AMI=$(jq -r '.builds[-1].artifact_id' manifest.json | cut -d: -f2)
+          aws ssm put-parameter --name /itr/gateway/ami \
+            --type String --data-type aws:ec2:image --value "$AMI" --overwrite
+          echo "ami=$AMI" >> "$GITHUB_OUTPUT"
+          echo "gateway image: \`$AMI\` (SSM /itr/gateway/ami)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Put it on the running gateway (root disk swap, one reboot)
+        run: gateway/image/deploy.sh "${{ steps.publish.outputs.ami }}"
+      - name: Keep the newest 2 images
+        run: gateway/image/prune.sh 2
