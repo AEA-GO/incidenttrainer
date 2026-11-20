@@ -1,4 +1,4 @@
-# IncidentTrainer network: two private subnets, no internet gateway, no NAT.
+# IncidentTrainer network: two private subnets, no NAT, no route to the internet.
 #
 #   sandboxes subnet - one EC2 per game. Its route table has only the local route and
 #                      no endpoints: game servers cannot reach anything outside the VPC.
@@ -9,8 +9,13 @@
 # The gateway is the only thing that talks to a game server's agent (player API 8080,
 # control API 8081), so there is no VPC Lambda.
 #
-# Cost: $0. VPC, subnets, gateway endpoints and the Instance Connect Endpoint are free;
-# there are no NAT gateways and no public IPv4 addresses.
+# An internet gateway is attached but no route table points to it: CloudFront VPC
+# origins require one on the VPC "to denote that the VPC can receive traffic from the
+# internet"; it is not used to route traffic to origins inside the subnet. So no subnet
+# gets internet (decided 20 Nov).
+#
+# Cost: $0. VPC, subnets, the internet gateway, gateway endpoints and the Instance Connect
+# Endpoint are free; there are no NAT gateways and no public IPv4 addresses.
 # Packer builds run in the account's default VPC, which has internet access.
 
 data "aws_region" "current" {}
@@ -24,6 +29,12 @@ resource "aws_vpc" "this" {
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags                 = { Name = var.name }
+}
+
+# Needed by the CloudFront VPC origin (the gateway). Deliberately in no route table.
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = "${var.name}-cloudfront-only" }
 }
 
 # The VPC's default security group allows everything between its members and all

@@ -21,3 +21,8 @@ output "security_group_ids" {
 output "instance_connect_endpoint_id" {
   value = aws_ec2_instance_connect_endpoint.this.id
 }
+
+output "internet_gateway_id" {
+  description = "Attached with no routes; CloudFront VPC origins need it to exist first."
+  value       = aws_internet_gateway.this.id
+}

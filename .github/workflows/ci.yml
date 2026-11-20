@@ -155,7 +155,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [checks, secrets]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60 # a CloudFront VPC origin alone can take 15 min to create or update
     environment: main # the apply role trusts only jobs in this environment
     concurrency:
       group: terraform-apply-main

@@ -6,10 +6,11 @@
 # - A CloudFront Function sends app routes like /labs/3am to /index.html (single-page app),
 #   only on the website behaviour, so future /api/* errors are not rewritten.
 # - /api/* goes to the session API (API Gateway → Lambda), never cached.
-# - Later /s/* goes to the gateway (VPC origin).
+# - /s/* goes to the gateway, a private EC2 instance reached through a VPC origin (no
+#   public IP), never cached; every header, cookie and query string goes along.
 #
 # Cost: ~$0. CloudFront's always-free tier covers 1 TB out and 10M requests a month;
-# S3 storage for a small site is cents.
+# VPC origins cost nothing extra; S3 storage for a small site is cents.
 
 data "aws_caller_identity" "current" {}
 
@@ -29,6 +30,12 @@ data "aws_cloudfront_cache_policy" "disabled" {
 # which must stay API Gateway's own hostname.
 data "aws_cloudfront_origin_request_policy" "all_except_host" {
   name = "Managed-AllViewerExceptHostHeader"
+}
+
+# The gateway needs the game cookie, Origin (terminal WebSocket check), query strings
+# and the WebSocket upgrade headers.
+data "aws_cloudfront_origin_request_policy" "all_viewer" {
+  name = "Managed-AllViewer"
 }
 
 # --- Bucket ----------------------------------------------------------------------
@@ -63,6 +70,26 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "site" {
 }
 
 # --- CloudFront ------------------------------------------------------------------
+
+# The gateway EC2 as a private origin. Creating or updating this takes up to 15 min,
+# which is why gateway deploys swap the root disk instead of replacing the server.
+resource "aws_cloudfront_vpc_origin" "gateway" {
+  vpc_origin_endpoint_config {
+    name                   = "${var.name}-gateway"
+    arn                    = var.gateway_instance_arn
+    http_port              = 80
+    https_port             = 443
+    origin_protocol_policy = "http-only" # inside the VPC; the browser side is HTTPS
+
+    origin_ssl_protocols {
+      items    = ["TLSv1.2"]
+      quantity = 1
+    }
+  }
+
+  # Makes Terraform create the internet gateway first (CloudFront requires it on the VPC).
+  tags = { requires_internet_gateway = var.internet_gateway_id }
+}
 
 resource "aws_cloudfront_origin_access_control" "site" {
   name                              = "${var.name}-web"
@@ -104,6 +131,29 @@ resource "aws_cloudfront_distribution" "site" {
       origin_protocol_policy = "https-only"
       origin_ssl_protocols   = ["TLSv1.2"]
     }
+  }
+
+  origin {
+    origin_id   = "gateway"
+    domain_name = var.gateway_private_dns
+
+    vpc_origin_config {
+      vpc_origin_id            = aws_cloudfront_vpc_origin.gateway.id
+      origin_read_timeout      = 60 # the agent answers within ~35 s at worst
+      origin_keepalive_timeout = 60
+    }
+  }
+
+  ordered_cache_behavior {
+    path_pattern               = "/s/*"
+    target_origin_id           = "gateway"
+    viewer_protocol_policy     = "https-only"
+    allowed_methods            = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods             = ["GET", "HEAD"]
+    compress                   = true
+    cache_policy_id            = data.aws_cloudfront_cache_policy.disabled.id
+    origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.all_viewer.id
+    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security.id
   }
 
   ordered_cache_behavior {

@@ -28,3 +28,11 @@ output "website_url" {
 output "api_function_name" {
   value = module.api.function_name
 }
+
+output "labs_bucket" {
+  value = module.labs.bucket
+}
+
+output "gateway_instance_id" {
+  value = module.gateway.instance_id
+}
