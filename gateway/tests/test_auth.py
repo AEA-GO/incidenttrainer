@@ -217,3 +217,43 @@ def test_deny_without_a_known_code_is_an_internal_error(world) -> None:
 
 def test_healthz(world) -> None:
     assert world.client.get("/healthz").json() == {"status": "ok"}
+
+
+# ----- laptop only: /dev-login ------------------------------------------------------
+def test_dev_login_is_off_unless_asked_for(world) -> None:
+    world.put()
+    assert world.client.get(f"/dev-login?game={GAME_ID}").status_code == 404
+
+
+def test_dev_login_sets_a_working_cookie(tmp_path, clock) -> None:
+    from conftest import KEYS
+    from fastapi.testclient import TestClient
+    from itr_gateway.app import Settings, build_app
+    from itr_gateway.store import FileStore
+
+    games = tmp_path / "games.json"
+    games.write_text(
+        json.dumps(
+            {"games": {GAME_ID: {"state": "investigating", "private_ip": "127.0.0.1"}}}
+        )
+    )
+    store = FileStore(path=games, keys_json=json.dumps(KEYS), clock=clock)
+    settings = Settings(
+        sandbox_cidrs=["127.0.0.0/8"], insecure_cookie=True, dev_login=True
+    )
+    client = TestClient(build_app(store, settings, clock=clock), follow_redirects=False)
+
+    answer = client.get(f"/dev-login?game={GAME_ID}")
+    assert answer.status_code == 302
+    assert answer.headers["location"] == f"/s/{GAME_ID}/grafana/d/shop-overview"
+    set_cookie = answer.headers["set-cookie"]
+    assert set_cookie.startswith("itr_game=v1.")
+    for part in (f"Path=/s/{GAME_ID}/", "HttpOnly", "SameSite=strict", "Max-Age=2700"):
+        assert part in set_cookie
+    value = set_cookie.split(";", 1)[0]
+    check = client.get(
+        "/auth",
+        headers={"X-Original-URI": f"/s/{GAME_ID}/api/v1/state", "Cookie": value},
+    )
+    assert check.status_code == 204
+    assert client.get("/dev-login?game=AAAAAAAAAAAAAAAAAAAAAA").status_code == 404

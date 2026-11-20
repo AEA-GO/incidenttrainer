@@ -7,6 +7,7 @@ Settings (environment variables; systemd sets them on the gateway server):
   ITR_PUBLIC_ORIGIN    e.g. https://drer7le45ultl.cloudfront.net (terminal WebSocket check)
   ITR_SANDBOX_CIDRS    default 10.20.0.0/20; comma-separated. Never forward anywhere else.
   ITR_COOKIE_INSECURE  1 = laptop cookie `itr_game` (no __Secure- prefix)
+  ITR_DEV_LOGIN        1 = laptop: /dev-login sets a game cookie in a browser (never on a server)
   ITR_AUTH_HOST        default 127.0.0.1 (only nginx talks to it)
   ITR_AUTH_PORT        default 9000
 """
@@ -28,6 +29,7 @@ def settings_from_env(env: dict[str, str]):
         public_origin=env.get("ITR_PUBLIC_ORIGIN") or None,
         sandbox_cidrs=cidrs,
         insecure_cookie=env.get("ITR_COOKIE_INSECURE") == "1",
+        dev_login=env.get("ITR_DEV_LOGIN") == "1",
     )
 
 
@@ -52,6 +54,8 @@ def main() -> None:
 
     setup_logging()
     env = dict(os.environ)
+    if env.get("ITR_DEV_LOGIN") == "1" and env.get("ITR_TABLE"):
+        sys.exit("ITR_DEV_LOGIN is for laptops only; it can't be used with ITR_TABLE")
     app = build_app(store_from_env(env), settings_from_env(env))
     uvicorn.run(
         app,

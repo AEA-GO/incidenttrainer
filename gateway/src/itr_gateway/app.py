@@ -18,10 +18,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from itr_gateway import errors
-from itr_gateway.cookie import COOKIE_NAME, COOKIE_NAME_INSECURE
+from itr_gateway.cookie import (
+    COOKIE_NAME,
+    COOKIE_NAME_INSECURE,
+    GAME_ID,
+    LIFETIME_S,
+    sign,
+)
 from itr_gateway.errors import GatewayError, error_body
 from itr_gateway.route import PATH, BootAnswer, Router
 from itr_gateway.store import Store
@@ -54,6 +60,8 @@ class Settings:
     )
     sandbox_cidrs: list[str] = field(default_factory=lambda: ["10.20.0.0/20"])
     insecure_cookie: bool = False  # laptops only: cookie `itr_game` without __Secure-
+    dev_login: bool = False  # laptops only: /dev-login sets a cookie for any game
+    dev_kid: str = "k1"  # the key /dev-login signs with
 
 
 def build_app(
@@ -76,6 +84,30 @@ def build_app(
     @app.get("/healthz")
     def healthz() -> dict:
         return {"status": "ok"}
+
+    if settings.dev_login:
+
+        @app.get("/dev-login")
+        def dev_login(game: str, then: str = "grafana/d/shop-overview") -> Response:
+            key = store.key(settings.dev_kid)
+            if not GAME_ID.match(game) or key is None or store.game(game) is None:
+                return JSONResponse(
+                    error_body("not_found", "There is no such game."), status_code=404
+                )
+            exp = int(clock()) + LIFETIME_S
+            response = RedirectResponse(
+                f"/s/{game}/{then.lstrip('/')}", status_code=302
+            )
+            response.set_cookie(
+                router.cookie_name,
+                sign(key, game, exp, settings.dev_kid),
+                max_age=LIFETIME_S,
+                path=f"/s/{game}/",
+                httponly=True,
+                samesite="strict",
+                secure=not settings.insecure_cookie,
+            )
+            return response
 
     @app.get("/auth")
     def auth(request: Request) -> Response:

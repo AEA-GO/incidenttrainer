@@ -16,11 +16,18 @@ Plays both roles the browser and the gateway will have later:
     python3 dev/play.py auto               # play a whole game like an expert
 
 `start --watch 30` and `auto --watch 30` shorten the watch (normally 4:00) for demos.
+Through the gateway on this laptop (gateway/README.md), like a browser:
+    ITR_GATEWAY=http://localhost:8088 python3 dev/play.py ...
+player calls then go to /s/<game>/api/v1/... with the game cookie instead of straight
+to the agent; `browser` prints the link that opens the game's Grafana in a browser.
 `start --push FILE` plays another lab: a push file made by the labs repo's make_push.py.
 The agent forgets everything when restarted: restart it before each new game.
 """
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -37,6 +44,8 @@ GAME_ID = (
     "q3V9xYk2Lm8Ta1BcD4eF0g"  # dev values only; the real gateway makes random ones
 )
 TOKEN = "t" * 43
+GATEWAY = os.environ.get("ITR_GATEWAY", "").rstrip("/")  # e.g. http://localhost:8088
+DEV_KEY = bytes(range(32))  # the contract's test key; laptops only (gateway/dev)
 PUSH = Path(__file__).resolve().parent / "labs" / "dev-lab.push.json"
 STARTED = time.monotonic()
 TIMESTAMPS = False  # only `auto` prints elapsed time
@@ -65,7 +74,20 @@ def call(method: str, url: str, body: dict | None = None, headers: dict | None =
         sys.exit(f"Can't reach the agent at {url} ({error.reason}). Is it running?")
 
 
+def game_cookie() -> str:
+    """The laptop game cookie, as the API will set it (contract 5)."""
+    exp = int(time.time()) + 2700
+    signed = f"v1.{GAME_ID}.{exp}.k1"
+    sig = hmac.new(DEV_KEY, signed.encode(), hashlib.sha256).digest()
+    return f"itr_game={signed}.{base64.urlsafe_b64encode(sig).rstrip(b'=').decode()}"
+
+
 def player(method: str, path: str, body: dict | None = None, **headers: str):
+    if (
+        GATEWAY
+    ):  # like a browser: the path under /s/<game>/api, the cookie, no game header
+        url = f"{GATEWAY}/s/{GAME_ID}/api{path}"
+        return call(method, url, body, {"Cookie": game_cookie(), **headers})
     return call(method, PLAYER + path, body, {"X-Itr-Game-Id": GAME_ID, **headers})
 
 
@@ -101,7 +123,7 @@ def start(watch: int | None = None, push_file: Path = PUSH) -> None:
         {
             "game_id": GAME_ID,
             "token": TOKEN,
-            "public_base_url": "http://localhost:8000",
+            "public_base_url": GATEWAY or "http://localhost:8000",
         },
     )
     if status != 204:
@@ -343,6 +365,13 @@ def auto(watch: int | None) -> None:
     diary()
 
 
+def browser() -> None:
+    if not GATEWAY:
+        sys.exit("Set ITR_GATEWAY=http://localhost:8088 (the laptop gateway) first.")
+    print(f"Open in a browser: {GATEWAY}/s/{GAME_ID}/dev-login")
+    print("It sets the game cookie and opens the game's Grafana, through the gateway.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -355,7 +384,16 @@ def main() -> None:
             sub.add_argument(
                 "--push", type=Path, default=PUSH, help="push file of the lab to play"
             )
-    for name in ("state", "ack", "chat", "resolve", "give-up", "feed", "diary"):
+    for name in (
+        "state",
+        "ack",
+        "chat",
+        "resolve",
+        "give-up",
+        "feed",
+        "diary",
+        "browser",
+    ):
         commands.add_parser(name)
     reply_parser = commands.add_parser("reply")
     reply_parser.add_argument("message_id")
@@ -382,6 +420,7 @@ def main() -> None:
             "give-up": give_up,
             "feed": feed,
             "diary": diary,
+            "browser": browser,
         }[args.command]()
 
 
