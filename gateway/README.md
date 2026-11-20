@@ -24,6 +24,7 @@ claims the agent, pushes the runbook, copies events, ends idle games (below).
 | `src/itr_gateway/app.py` | `/auth`, `/deny`, `/healthz` for nginx |
 | `src/itr_gateway/broker.py` | the session broker: boots games, copies events, ends idle games |
 | `dev/` | the laptop setup: `new_game.py`, `run-auth.sh`, nginx in `compose.yaml` |
+| `image/` | the gateway server's image (Packer), its deploy by root-disk swap; see `image/README.md` |
 | `nginx/itr-gateway.conf` | the site (goes in `/etc/nginx/conf.d/`); `itr-auth.conf` and `itr-proxy-headers.conf` go in `/etc/nginx/` |
 
 ## Run the tests
