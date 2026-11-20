@@ -10,9 +10,16 @@ State: `s3://itr-tfstate-557541683274/envs/main/terraform.tfstate` (native locki
 
 | Part | Cost |
 | --- | --- |
-| Network: VPC, 2 private subnets, S3 and DynamoDB gateway endpoints, EC2 Instance Connect Endpoint, security groups | $0 |
+| Network: VPC, 2 private subnets, S3 and DynamoDB gateway endpoints, EC2 Instance Connect Endpoint, security groups, an internet gateway with **no routes** (CloudFront VPC origins require one) | $0 |
 | Website: private S3 bucket, CloudFront (OAC, SPA routing function, security headers) | ~$0 (CloudFront free tier) |
 | Data: DynamoDB table `itr-main` (on-demand, TTL, point-in-time recovery, deletion protection) | cents |
 | API: Lambda `itr-main-api` (FastAPI, arm64) behind an HTTP API, reached through CloudFront `/api/*` | cents |
+| Labs: private bucket `itr-main-labs-<account>` (`labs/<lab>/v<version>/{card,runbook,debrief}.json`), versioned, HTTPS only | cents |
+| Gateway: t4g.micro `itr-main-gateway` in the platform subnet from the gateway image (SSM `/itr/gateway/ami`), role for the game table + runbooks only, CloudFront `/s/*` through a VPC origin | ~$7.80/month |
 
 Website address: `terraform output -raw website_url` (a `*.cloudfront.net` address until the domain is bought).
+
+**The gateway's image** is not changed by Terraform after the server exists (`ami` is
+ignored): `.github/workflows/gateway-image.yml` puts new images on it by swapping its root
+disk (see `gateway/image/README.md`). Creating or changing the VPC origin takes up to 15
+minutes, so the first apply with the gateway takes ~20-25 minutes.
