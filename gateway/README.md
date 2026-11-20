@@ -11,8 +11,8 @@ CloudFront /s/* ──► nginx :80 ──auth_request──► gateway-auth 127
 
 **gateway-auth** (this Python project, `itr-gateway-auth`) answers nginx for every request:
 forward it (to which private IP and port) or refuse it (status + code from contract 5).
-While a game boots it answers the boot screen itself. Later (step 3) it is also the
-session broker: claims the agent, pushes the runbook, copies events, ends idle games.
+While a game boots it answers the boot screen itself. It is also the session broker:
+claims the agent, pushes the runbook, copies events, ends idle games (below).
 
 ## Files
 
@@ -22,6 +22,8 @@ session broker: claims the agent, pushes the runbook, copies events, ends idle g
 | `src/itr_gateway/route.py` | path → cookie → game → state: forward or refuse |
 | `src/itr_gateway/store.py` | games, cookie keys and heartbeats: DynamoDB (`TableStore`) or a laptop JSON file (`FileStore`), with the contract's caching |
 | `src/itr_gateway/app.py` | `/auth`, `/deny`, `/healthz` for nginx |
+| `src/itr_gateway/broker.py` | the session broker: boots games, copies events, ends idle games |
+| `dev/` | the laptop setup: `new_game.py`, `run-auth.sh`, nginx in `compose.yaml` |
 | `nginx/itr-gateway.conf` | the site (goes in `/etc/nginx/conf.d/`); `itr-auth.conf` and `itr-proxy-headers.conf` go in `/etc/nginx/` |
 
 ## Run the tests
@@ -35,17 +37,26 @@ No AWS needed: DynamoDB is faked with moto. `tests/test_nginx.py` starts the rea
 config with gateway-auth and fake game-server ports and probes it like a browser; it is
 skipped where nginx isn't installed (CI installs it).
 
-## A game's server is "gone" when
+## Contract notes (for the next contracts PR)
 
-`GAME#<id> / META` has `server_terminated_at` (written by whoever deletes the server), or
-no `private_ip`, or `expires_at_server` has passed. Then an ended game answers `410 ended`.
-(`server_terminated_at` is new: add it to data-model.md in the next contracts PR.)
+- A game's server is "gone" when `GAME#<id> / META` has `server_terminated_at` (written by
+  whoever deletes the server), or no `private_ip`, or `expires_at_server` has passed. Then an
+  ended game answers `410 ended`. `server_terminated_at` is new in data-model.md.
+- New META fields written by the broker: `heartbeat_lost_at`; `ready_at` and
+  `events_synced_seq` were already listed.
+- `labs/<lab>/v<version>/runbook.json` in the lab bucket is the runbook exactly as
+  `make_push.py` builds it (`id`, `version`, `limits`, ...); the broker adds `game_id`,
+  `lab_id`, `lab_version` and `limits` around it for `PUT /control/v1/runbook`.
+- The gateway's own events use fixed `seq` numbers: `agent_ready` 1, `heartbeat_lost` 2,
+  `ended` 3.
 
 ## Play a lab through the gateway on a laptop
 
-The same as `docs/play-a-lab.md` in the labs repo, plus the gateway in front: the player's
-calls and Grafana go through nginx + gateway-auth exactly as a browser's will. The game id is
-play.py's fixed dev id; the cookie key is the contract's public test key (laptops only).
+The same as `docs/play-a-lab.md` in the labs repo, but the gateway does the gateway's job:
+it boots the game (claims the agent, pushes the runbook), copies the game's events and keeps
+its state, and every player call and Grafana go through nginx + gateway-auth exactly as a
+browser's will. The game id is play.py's fixed dev id; the cookie key is the contract's
+public test key (laptops only).
 
 **Terminal 1, the shop** (labs repo, `worlds/teapot-basic`): Grafana must live under the game's path.
 ```bash
@@ -61,9 +72,12 @@ W=~/IncTrainer/incidenttrainer-labs/worlds/teapot-basic
 ITR_WORLD_MANIFEST=$W/world.yaml ITR_COMPOSE_DIR=$W uv run itr-agent
 ```
 
-**Terminal 3, gateway-auth** (platform repo, `gateway/`):
+**Terminal 3, gateway-auth** (platform repo, `gateway/`): a new game, then the gateway.
 ```bash
-dev/run-auth.sh
+L=~/IncTrainer/incidenttrainer-labs
+(cd $L && uv run --no-project --with pyyaml --with jsonschema scripts/make_push.py labs/checkout-down-3am/lab.yaml)
+python3 dev/new_game.py                                     # before every game
+dev/run-auth.sh                                             # keeps running; new games need no restart
 ```
 
 **Terminal 4, nginx and you** (platform repo, `gateway/`):
@@ -71,21 +85,40 @@ dev/run-auth.sh
 docker compose -f dev/compose.yaml up -d                    # nginx on http://localhost:8088
 export ITR_GATEWAY=http://localhost:8088
 P="python3 $HOME/IncTrainer/incidenttrainer/agent/dev/play.py"
-L=~/IncTrainer/incidenttrainer-labs
-(cd $L && uv run --no-project --with pyyaml --with jsonschema scripts/make_push.py labs/checkout-down-3am/lab.yaml)
-$P start --push $L/out/checkout-down-3am/push.json
-$P state          # ... ack, press, chat, resolve, feed: all through the gateway now
+$P state          # BOOTING, then READY: the gateway started the game (no `start` needed)
 $P browser        # a link: opens the game's Grafana through the gateway in your browser
 ```
-Watch what the gateway does: `docker compose -f dev/compose.yaml logs -f` (nginx, one JSON
-line per request) and terminal 3 (gateway-auth, one line per refusal).
+Then play as usual: `ack`, `press`, `chat`, `reply`, `resolve`, `feed`, all through the gateway.
+
+What the gateway wrote, as the API will read it from DynamoDB:
+```bash
+python3 -m json.tool dev/.games.json                        # META: state, ready_at, ended_at, events_synced_seq...
+cat dev/.games.json.events/*.jsonl                          # the game diary (agent + gateway events)
+```
+Watch it work: terminal 3 logs "game ready" / "game ended"; `docker compose -f dev/compose.yaml
+logs -f` shows nginx's one JSON line per request.
+
+Next game: Ctrl+C the agent, `scripts/seed-data.sh` in terminal 1, start the agent again,
+`python3 dev/new_game.py` in another terminal (gateway-auth picks the new file up by itself).
 
 Afterwards: `docker compose -f dev/compose.yaml down`; in terminal 1 `unset GRAFANA_ROOT_URL
 GRAFANA_SUB_PATH && docker compose up -d grafana` puts Grafana back on http://127.0.0.1:3000.
 
-`dev/games.json` holds the game as gateway-auth sees it (state `investigating`, server
-127.0.0.1). Until the broker exists (step 3) that state doesn't follow the game; every
-playing state routes the same way, so it doesn't matter yet.
+## The broker (contract 5)
+
+`src/itr_gateway/broker.py`, running inside gateway-auth every 5 s (and at once when the
+boot screen polls a booting game):
+
+| Game | What it does |
+| --- | --- |
+| `booting` | waits for the agent's `ready` (its `components` feed the boot screen); saves a control token on META (only one worker wins); claims the agent; reads `labs/<lab>/v<version>/runbook.json` from the lab bucket; pushes it; writes `agent_ready` and state `ready` |
+| `ready` ... `watching` | every 10 s copies new agent events (`EV#agent#<seq>`) and `state`, `severity`, `reopened`, `events_synced_seq` onto META |
+| idle 300 s | writes `heartbeat_lost`, asks the agent to end the game |
+| agent says `ended` | copies the last events, **then** META `ended` (once), leaves `ACTIVE`, frees the server slot (`COUNTER/RUNNING`) |
+| agent silent 60 s | writes `ended` (abandoned, last health) itself |
+
+The gateway's own events have fixed numbers (`agent_ready` 1, `heartbeat_lost` 2, `ended` 3),
+so writing one twice is harmless.
 
 ## Settings
 

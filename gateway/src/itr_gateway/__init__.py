@@ -8,6 +8,8 @@ Settings (environment variables; systemd sets them on the gateway server):
   ITR_SANDBOX_CIDRS    default 10.20.0.0/20; comma-separated. Never forward anywhere else.
   ITR_COOKIE_INSECURE  1 = laptop cookie `itr_game` (no __Secure- prefix)
   ITR_DEV_LOGIN        1 = laptop: /dev-login sets a game cookie in a browser (never on a server)
+  ITR_LAB_BUCKET       the lab content bucket (runbooks): turns the broker on
+  ITR_DEV_RUNBOOKS     laptop instead: the labs repo's out/ folder (<lab>/push.json)
   ITR_AUTH_HOST        default 127.0.0.1 (only nginx talks to it)
   ITR_AUTH_PORT        default 9000
 """
@@ -46,6 +48,25 @@ def setup_logging() -> None:
         logging.getLogger(name).propagate = True
 
 
+def broker_from_env(store, env: dict[str, str]):
+    """The session broker, if a runbook source is set (else gateway-auth only checks cookies)."""
+    from pathlib import Path
+
+    from itr_gateway.broker import Broker, BucketRunbooks, FolderRunbooks
+
+    if env.get("ITR_LAB_BUCKET"):
+        runbooks = BucketRunbooks(bucket=env["ITR_LAB_BUCKET"])
+    elif env.get("ITR_DEV_RUNBOOKS"):
+        runbooks = FolderRunbooks(folder=Path(env["ITR_DEV_RUNBOOKS"]))
+    else:
+        return None
+    if not env.get("ITR_PUBLIC_ORIGIN"):
+        sys.exit("The broker needs ITR_PUBLIC_ORIGIN (the address players use)")
+    return Broker(
+        store=store, runbooks=runbooks, public_base_url=env["ITR_PUBLIC_ORIGIN"]
+    )
+
+
 def main() -> None:
     import uvicorn
 
@@ -56,7 +77,8 @@ def main() -> None:
     env = dict(os.environ)
     if env.get("ITR_DEV_LOGIN") == "1" and env.get("ITR_TABLE"):
         sys.exit("ITR_DEV_LOGIN is for laptops only; it can't be used with ITR_TABLE")
-    app = build_app(store_from_env(env), settings_from_env(env))
+    store = store_from_env(env)
+    app = build_app(store, settings_from_env(env), broker=broker_from_env(store, env))
     uvicorn.run(
         app,
         host=env.get("ITR_AUTH_HOST", "127.0.0.1"),

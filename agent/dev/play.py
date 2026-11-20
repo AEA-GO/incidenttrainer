@@ -20,6 +20,8 @@ Through the gateway on this laptop (gateway/README.md), like a browser:
     ITR_GATEWAY=http://localhost:8088 python3 dev/play.py ...
 player calls then go to /s/<game>/api/v1/... with the game cookie instead of straight
 to the agent; `browser` prints the link that opens the game's Grafana in a browser.
+With the gateway's broker (gateway/dev/new_game.py) skip `start`: the gateway claims the
+agent and pushes the runbook itself; `state` shows BOOTING until it has.
 `start --push FILE` plays another lab: a push file made by the labs repo's make_push.py.
 The agent forgets everything when restarted: restart it before each new game.
 """
@@ -154,6 +156,15 @@ def show_state() -> dict:
     status, s = player("GET", "/v1/state")
     if status != 200:
         print(error_text(s))
+        return s
+    if s.get("state") == "booting":  # answered by the gateway while the server starts
+        boot = s["boot"]
+        parts = ", ".join(
+            f"{name} {state}" for name, state in (boot.get("components") or {}).items()
+        )
+        print(
+            f"BOOTING  {boot['seconds_since_start']}s  {parts or 'waiting for the agent'}"
+        )
         return s
     clock = s["clock"]
     head = f"{s['state'].upper()}  {s['severity']}"
