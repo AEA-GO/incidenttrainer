@@ -1,4 +1,4 @@
-"""Where gateway-auth reads games and cookie keys, and writes heartbeats.
+"""Where gateway-auth reads games and cookie keys, and writes heartbeats and the broker's work.
 
 Two stores with the same methods:
   TableStore   DynamoDB table `itr-main` (data-model.md), on the gateway server
@@ -30,6 +30,7 @@ BOOTING_TTL_S = 2
 KEYS_TTL_S = 300
 KEYS_RETRY_S = 30
 HEARTBEAT_EVERY_S = 30
+EVENT_TTL_S = 30 * 86400  # game data lives 30 days (data-model.md)
 
 PLAYING = ("ready", "paged", "investigating", "watching")
 STATES = ("booting", *PLAYING, "ended")
@@ -223,6 +224,221 @@ class TableStore(CachingStore):
             if error.response["Error"]["Code"] != "ConditionalCheckFailedException":
                 raise
 
+    # ----- the broker's reads and writes (contract 5, data-model.md) -----------------
+    def _meta_key(self, game_id: str) -> dict:
+        return {"pk": f"GAME#{game_id}", "sk": "META"}
+
+    def _update(
+        self,
+        key: dict,
+        expression: str,
+        values: dict,
+        condition: str | None = None,
+        names=None,
+    ) -> bool:
+        """An UpdateItem; False when its condition fails."""
+        from botocore.exceptions import ClientError
+
+        args: dict = {
+            "Key": key,
+            "UpdateExpression": expression,
+            "ExpressionAttributeValues": values,
+        }
+        if condition:
+            args["ConditionExpression"] = condition
+        if names:
+            args["ExpressionAttributeNames"] = names
+        try:
+            self.table.update_item(**args)
+            return True
+        except ClientError as error:
+            if error.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def active_ids(self) -> list[str]:
+        reply = self.table.query(
+            KeyConditionExpression="pk = :pk AND begins_with(sk, :game)",
+            ExpressionAttributeValues={":pk": "ACTIVE", ":game": "GAME#"},
+            ConsistentRead=True,
+        )
+        return [item["sk"].removeprefix("GAME#") for item in reply.get("Items", [])]
+
+    def meta(self, game_id: str) -> dict | None:
+        reply = self.table.get_item(Key=self._meta_key(game_id), ConsistentRead=True)
+        return reply.get("Item")
+
+    def save_token(self, game_id: str, token: str) -> str:
+        if self._update(
+            self._meta_key(game_id),
+            "SET control_token = :token",
+            {":token": token},
+            "attribute_exists(pk) AND attribute_not_exists(control_token)",
+        ):
+            return token
+        return str(
+            (self.meta(game_id) or {})["control_token"]
+        )  # another worker won: use theirs
+
+    def mark_ready(self, game_id: str, at: str) -> None:
+        names = {"#state": "state"}
+        self._update(
+            self._meta_key(game_id),
+            "SET #state = :ready, ready_at = :at",
+            {":ready": "ready", ":at": at, ":booting": "booting"},
+            "#state = :booting",
+            names,
+        )
+        self._update(
+            {"pk": "ACTIVE", "sk": f"GAME#{game_id}"},
+            "SET #state = :ready",
+            {":ready": "ready"},
+            "attribute_exists(pk)",
+            names,
+        )
+
+    def save_events(self, game_id: str, events: list[dict]) -> None:
+        expires = int(self.clock()) + EVENT_TTL_S
+        with self.table.batch_writer(overwrite_by_pkeys=["pk", "sk"]) as batch:
+            for event in events:
+                item = json.loads(
+                    json.dumps(event), parse_float=Decimal
+                )  # DynamoDB has no floats
+                item |= {
+                    "pk": f"GAME#{game_id}",
+                    "sk": f"EV#{event['by']}#{int(event['seq']):06d}",
+                    "expires_at": expires,
+                }
+                batch.put_item(Item=item)
+
+    def save_progress(
+        self,
+        game_id: str,
+        synced_seq: int,
+        state: str | None,
+        severity: str | None,
+        reopened: bool,
+    ) -> None:
+        sets = ["events_synced_seq = :seq", "reopened = :reopened"]
+        values: dict = {":seq": synced_seq, ":reopened": reopened, ":ended": "ended"}
+        if severity:
+            sets.append("severity = :severity")
+            values[":severity"] = severity
+        if state:
+            sets.append("#state = :state")
+            values[":state"] = state
+        self._update(
+            self._meta_key(game_id),
+            "SET " + ", ".join(sets),
+            values,
+            "#state <> :ended",
+            {"#state": "state"},
+        )
+        if state:
+            self._update(
+                {"pk": "ACTIVE", "sk": f"GAME#{game_id}"},
+                "SET #state = :state",
+                {":state": state},
+                "attribute_exists(pk)",
+                {"#state": "state"},
+            )
+
+    def mark_heartbeat_lost(self, game_id: str, at: str) -> None:
+        self._update(
+            self._meta_key(game_id), "SET heartbeat_lost_at = :at", {":at": at}
+        )
+
+    def finish(self, game_id: str, end_reason: str, at: str) -> bool:
+        """META `ended` exactly once; the winner also frees the server slot (data-model.md)."""
+        from botocore.exceptions import ClientError
+
+        client = self.table.meta.client
+        name = self.table.name
+        meta_update = {
+            "Update": {
+                "TableName": name,
+                "Key": self._meta_key(game_id),
+                "UpdateExpression": "SET #state = :ended, end_reason = :reason, ended_at = :at",
+                "ConditionExpression": "attribute_exists(pk) AND #state <> :ended",
+                "ExpressionAttributeNames": {"#state": "state"},
+                "ExpressionAttributeValues": {
+                    ":ended": "ended",
+                    ":reason": end_reason,
+                    ":at": at,
+                },
+            }
+        }
+        leave = {
+            "Delete": {
+                "TableName": name,
+                "Key": {"pk": "ACTIVE", "sk": f"GAME#{game_id}"},
+            }
+        }
+        running = {
+            "Update": {
+                "TableName": name,
+                "Key": {"pk": "COUNTER", "sk": "RUNNING"},
+                "UpdateExpression": "SET #count = #count - :one",
+                "ConditionExpression": "#count > :zero",
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": {":one": 1, ":zero": 0},
+            }
+        }
+        won = False
+        for items in ([meta_update, leave, running], [meta_update, leave]):
+            try:
+                client.transact_write_items(TransactItems=items)
+                won = True
+                break
+            except ClientError as error:
+                reasons = [
+                    r.get("Code") for r in error.response.get("CancellationReasons", [])
+                ]
+                if reasons and reasons[0] == "ConditionalCheckFailed":
+                    break  # someone else ended it first
+                if len(items) == 3 and reasons[2:3] == ["ConditionalCheckFailed"]:
+                    continue  # the counter is already 0 (cleanup resets it): end without it
+                raise
+        if not won:
+            self.leave_active(game_id)
+            return False
+        meta = self.meta(game_id) or {}
+        if meta.get("code") and meta.get(
+            "created_at"
+        ):  # the code's list of games (best effort)
+            self._update(
+                {
+                    "pk": f"CODE#{meta['code']}",
+                    "sk": f"GAME#{meta['created_at']}#{game_id}",
+                },
+                "SET #state = :ended, end_reason = :reason",
+                {":ended": "ended", ":reason": end_reason},
+                "attribute_exists(pk)",
+                {"#state": "state"},
+            )
+        return True
+
+    def leave_active(self, game_id: str) -> None:
+        self.table.delete_item(Key={"pk": "ACTIVE", "sk": f"GAME#{game_id}"})
+
+    def last_health(self, game_id: str) -> int | None:
+        args: dict = {
+            "KeyConditionExpression": "pk = :pk AND begins_with(sk, :agent)",
+            "ExpressionAttributeValues": {
+                ":pk": f"GAME#{game_id}",
+                ":agent": "EV#agent#",
+            },
+            "ScanIndexForward": False,
+        }
+        while True:
+            reply = self.table.query(**args)
+            for item in reply.get("Items", []):
+                if item.get("type") == "health":
+                    return int(item["data"]["value"])
+            if "LastEvaluatedKey" not in reply:
+                return None
+            args["ExclusiveStartKey"] = reply["LastEvaluatedKey"]
+
 
 @dataclass
 class FileStore(CachingStore):
@@ -259,6 +475,106 @@ class FileStore(CachingStore):
 
     def write_heartbeat(self, game_id: str, now: float) -> None:
         self.last_seen[game_id] = int(now)
+        self._edit(game_id, {"last_seen_at": int(now)})
+
+    # ----- the broker on a laptop: the games file is the table -------------------------
+    # META changes are written back to the file; events go to <file>.events/<game>.jsonl.
+    def _edit(
+        self, game_id: str, changes: dict, only_if: Callable[[dict], bool] | None = None
+    ) -> bool:
+        with self._lock:
+            data = self._file()
+            game = (data.get("games") or {}).get(game_id)
+            if game is None or (only_if and not only_if(game)):
+                return False
+            game.update(changes)
+            if self.path is not None:
+                self.path.write_text(json.dumps(data, indent=2) + "\n")
+                self._mtime = self.path.stat().st_mtime
+            self._games.pop(game_id, None)
+        return True
+
+    def active_ids(self) -> list[str]:
+        games = self._file().get("games") or {}
+        return [
+            game_id for game_id, game in games.items() if game.get("state") != "ended"
+        ]
+
+    def meta(self, game_id: str) -> dict | None:
+        game = (self._file().get("games") or {}).get(game_id)
+        return dict(game) if game is not None else None
+
+    def save_token(self, game_id: str, token: str) -> str:
+        self._edit(
+            game_id,
+            {"control_token": token},
+            lambda game: not game.get("control_token"),
+        )
+        return str(self.meta(game_id)["control_token"])  # type: ignore[index]
+
+    def mark_ready(self, game_id: str, at: str) -> None:
+        self._edit(
+            game_id,
+            {"state": "ready", "ready_at": at},
+            lambda game: game.get("state") == "booting",
+        )
+
+    def events_file(self, game_id: str) -> Path:
+        folder = Path(f"{self.path}.events")
+        folder.mkdir(exist_ok=True)
+        return folder / f"{game_id}.jsonl"
+
+    def save_events(self, game_id: str, events: list[dict]) -> None:
+        file = self.events_file(game_id)
+        seen = set()
+        if file.exists():
+            seen = {
+                (e["by"], e["seq"])
+                for e in map(json.loads, file.read_text().splitlines())
+            }
+        with file.open("a") as out:
+            for event in events:
+                if (event["by"], event["seq"]) not in seen:  # same key = written once
+                    out.write(json.dumps(event) + "\n")
+
+    def save_progress(
+        self,
+        game_id: str,
+        synced_seq: int,
+        state: str | None,
+        severity: str | None,
+        reopened: bool,
+    ) -> None:
+        changes: dict = {"events_synced_seq": synced_seq, "reopened": reopened}
+        if severity:
+            changes["severity"] = severity
+        if state:
+            changes["state"] = state
+        self._edit(game_id, changes, lambda game: game.get("state") != "ended")
+
+    def mark_heartbeat_lost(self, game_id: str, at: str) -> None:
+        self._edit(game_id, {"heartbeat_lost_at": at})
+
+    def finish(self, game_id: str, end_reason: str, at: str) -> bool:
+        return self._edit(
+            game_id,
+            {"state": "ended", "end_reason": end_reason, "ended_at": at},
+            lambda game: game.get("state") != "ended",
+        )
+
+    def leave_active(self, game_id: str) -> None:
+        pass  # on a laptop, "active" = every game in the file that hasn't ended
+
+    def last_health(self, game_id: str) -> int | None:
+        file = self.events_file(game_id)
+        if not file.exists():
+            return None
+        values = [
+            e["data"]["value"]
+            for e in map(json.loads, file.read_text().splitlines())
+            if e["type"] == "health"
+        ]
+        return int(values[-1]) if values else None
 
 
 def store_from_env(env: dict[str, str] | None = None) -> CachingStore:

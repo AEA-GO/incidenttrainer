@@ -13,9 +13,12 @@ GET /healthz  for the gateway's own checks.
 import ipaddress
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -31,6 +34,9 @@ from itr_gateway.cookie import (
 from itr_gateway.errors import GatewayError, error_body
 from itr_gateway.route import PATH, BootAnswer, Router
 from itr_gateway.store import Store
+
+if TYPE_CHECKING:
+    from itr_gateway.broker import Broker
 
 log = logging.getLogger("itr_gateway")
 
@@ -69,16 +75,34 @@ def build_app(
     settings: Settings,
     clock: Callable[[], float] = time.time,
     boot_progress: Callable[[str], dict] | None = None,
+    broker: "Broker | None" = None,
 ) -> FastAPI:
-    """`boot_progress(game_id)` gives the agent's `components` while booting (the broker, step 3)."""
+    """With a broker: it runs in the background, and boot-screen polls kick it."""
+    if broker is not None and boot_progress is None:
+        boot_progress = broker.components
     router = Router(
         store=store,
         cookie_name=COOKIE_NAME_INSECURE if settings.insecure_cookie else COOKIE_NAME,
         public_origin=settings.public_origin,
         sandbox=[ipaddress.ip_network(cidr) for cidr in settings.sandbox_cidrs],
     )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        stop = threading.Event()
+        if broker is not None:
+            threading.Thread(
+                target=broker.run_forever, args=(stop,), name="broker", daemon=True
+            ).start()
+        yield
+        stop.set()
+
     app = FastAPI(
-        title="itr-gateway-auth", docs_url=None, redoc_url=None, openapi_url=None
+        title="itr-gateway-auth",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
     )
 
     @app.get("/healthz")
@@ -137,6 +161,8 @@ def build_app(
             return _refuse(error.status, error.code, error.retry_after_s)
         store.heartbeat(decision.game.game_id, now)
         if isinstance(decision, BootAnswer):
+            if broker is not None:
+                broker.kick(decision.game.game_id)  # the player is watching: boot now
             return _refuse(200, BOOT_STATE)
         return Response(
             status_code=204,
