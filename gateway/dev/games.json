@@ -1,0 +1,12 @@
+{
+  "games": {
+    "q3V9xYk2Lm8Ta1BcD4eF0g": {
+      "state": "investigating",
+      "private_ip": "127.0.0.1",
+      "instance_id": "laptop",
+      "terminal": false,
+      "created_at": "2026-11-20T00:00:00Z",
+      "expires_at_server": 4102444800
+    }
+  }
+}
