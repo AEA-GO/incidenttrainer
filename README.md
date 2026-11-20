@@ -12,6 +12,8 @@ A browser game where you play the on-call engineer: a real server breaks, you fi
 ## This repo
 - `web/`: website (React + TypeScript)
 - `api/`: backend API (Python, FastAPI on AWS Lambda)
+- `agent/`: the referee on every game server (Python)
+- `gateway/`: the front door to every game: nginx + gateway-auth (Python)
 - `infra/`: AWS infrastructure (Terraform)
 - `.github/`: CI/CD (GitHub Actions)
 - `docs/`: documentation, including [local setup](docs/setup.md)
