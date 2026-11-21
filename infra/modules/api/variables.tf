@@ -11,3 +11,13 @@ variable "table_name" {
 variable "table_arn" {
   type = string
 }
+
+variable "sandbox_subnet_ids" {
+  description = "Where the launcher may start game servers, first zone first (modules/network)."
+  type        = list(string)
+}
+
+variable "launch_template_arns" {
+  description = "The game servers' launch templates (modules/sandbox)."
+  type        = list(string)
+}

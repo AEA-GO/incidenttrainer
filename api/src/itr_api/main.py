@@ -49,5 +49,50 @@ def health() -> dict:
     }
 
 
+def launcher_check() -> dict:
+    """Start one real game server and delete it at once, with this function's own role.
+
+    Proves the launcher and its IAM policy end to end (contract 4: "one real launch from
+    the main environment"). Reachable only by invoking the Lambda directly with
+    {"itr_admin": "launcher_check"} (needs lambda:InvokeFunction, i.e. an admin); HTTP
+    requests through API Gateway never look like this. Costs well under a cent.
+    """
+    import secrets
+    from datetime import UTC, datetime, timedelta
+
+    from itr_api.launcher import LaunchError, ServerSpec, from_env
+
+    launcher = from_env()
+    spec = ServerSpec(
+        game_id=secrets.token_urlsafe(16),
+        world="teapot-basic",
+        expires_at=datetime.now(UTC) + timedelta(minutes=10),
+    )
+    try:
+        server = launcher.start(spec)
+    except LaunchError as error:
+        return {"ok": False, "kind": error.kind, "error": str(error)[:500]}
+    attempts = list(getattr(launcher, "last_attempts", []))
+    try:
+        again = launcher.start(spec)  # idempotent: must be the same server
+    finally:
+        launcher.stop(server.server_id)  # never leave the test server running
+    return {
+        "ok": again.server_id == server.server_id,
+        "server_id": server.server_id,
+        "instance_type": server.instance_type,
+        "zone": server.zone,
+        "address": server.address,
+        "attempts": attempts,
+        "stopped": True,
+    }
+
+
 # Lambda entry point (API Gateway HTTP API, payload v2).
-handler = Mangum(app, lifespan="off")
+_http = Mangum(app, lifespan="off")
+
+
+def handler(event, context):
+    if isinstance(event, dict) and event.get("itr_admin") == "launcher_check":
+        return launcher_check()
+    return _http(event, context)
