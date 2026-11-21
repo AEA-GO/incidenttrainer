@@ -22,6 +22,8 @@ player calls then go to /s/<game>/api/v1/... with the game cookie instead of str
 to the agent; `browser` prints the link that opens the game's Grafana in a browser.
 With the gateway's broker (gateway/dev/new_game.py) skip `start`: the gateway claims the
 agent and pushes the runbook itself; `state` shows BOOTING until it has.
+A game on AWS (gateway/scripts/hand_game.py start prints these exports):
+    ITR_GATEWAY=https://<cloudfront> ITR_GAME_ID=<id> ITR_GAME_COOKIE='__Secure-itr_game=...'
 `start --push FILE` plays another lab: a push file made by the labs repo's make_push.py.
 The agent forgets everything when restarted: restart it before each new game.
 """
@@ -42,9 +44,8 @@ from pathlib import Path
 HOST = os.environ.get("ITR_AGENT_HOST", "127.0.0.1")
 PLAYER = f"http://{HOST}:{os.environ.get('ITR_PLAYER_PORT', '8080')}"
 CONTROL = f"http://{HOST}:{os.environ.get('ITR_CONTROL_PORT', '8081')}"
-GAME_ID = (
-    "q3V9xYk2Lm8Ta1BcD4eF0g"  # dev values only; the real gateway makes random ones
-)
+# dev values only; an AWS game sets ITR_GAME_ID (gateway/scripts/hand_game.py)
+GAME_ID = os.environ.get("ITR_GAME_ID", "q3V9xYk2Lm8Ta1BcD4eF0g")
 TOKEN = "t" * 43
 GATEWAY = os.environ.get("ITR_GATEWAY", "").rstrip("/")  # e.g. http://localhost:8088
 DEV_KEY = bytes(range(32))  # the contract's test key; laptops only (gateway/dev)
@@ -77,7 +78,9 @@ def call(method: str, url: str, body: dict | None = None, headers: dict | None =
 
 
 def game_cookie() -> str:
-    """The laptop game cookie, as the API will set it (contract 5)."""
+    """The game cookie: ITR_GAME_COOKIE (an AWS game) or the laptop one, signed here."""
+    if os.environ.get("ITR_GAME_COOKIE"):
+        return os.environ["ITR_GAME_COOKIE"]
     exp = int(time.time()) + 2700
     signed = f"v1.{GAME_ID}.{exp}.k1"
     sig = hmac.new(DEV_KEY, signed.encode(), hashlib.sha256).digest()

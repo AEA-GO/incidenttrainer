@@ -24,6 +24,7 @@ claims the agent, pushes the runbook, copies events, ends idle games (below).
 | `src/itr_gateway/app.py` | `/auth`, `/deny`, `/healthz` for nginx |
 | `src/itr_gateway/broker.py` | the session broker: boots games, copies events, ends idle games |
 | `dev/` | the laptop setup: `new_game.py`, `run-auth.sh`, nginx in `compose.yaml` |
+| `scripts/` | by hand on AWS: `cookie_keys.py` (contract 5 keys), `hand_game.py` (publish a runbook, start a game) |
 | `image/` | the gateway server's image (Packer), its deploy by root-disk swap; see `image/README.md` |
 | `nginx/itr-gateway.conf` | the site (goes in `/etc/nginx/conf.d/`); `itr-auth.conf` and `itr-proxy-headers.conf` go in `/etc/nginx/` |
 
@@ -104,6 +105,27 @@ Next game: Ctrl+C the agent, `scripts/seed-data.sh` in terminal 1, start the age
 
 Afterwards: `docker compose -f dev/compose.yaml down`; in terminal 1 `unset GRAFANA_ROOT_URL
 GRAFANA_SUB_PATH && docker compose up -d grafana` puts Grafana back on http://127.0.0.1:3000.
+
+## A game on AWS by hand (until the API's "Start shift" exists)
+
+The real gateway, a real game server, lab 1, played with `play.py` through CloudFront.
+Run from the platform repo's `gateway/` folder, signed in with `aws login`:
+
+```bash
+uv run scripts/cookie_keys.py add               # once: the first cookie key (secrets never printed)
+L=~/IncTrainer/incidenttrainer-labs
+(cd $L && uv run --no-project --with pyyaml --with jsonschema scripts/make_push.py labs/checkout-down-3am/lab.yaml)
+uv run scripts/hand_game.py publish $L/out/checkout-down-3am/push.json   # runbook -> lab bucket
+(cd $L && images/test-server.sh start)          # a game server from the image (~$0.03, dies after 45 min)
+uv run scripts/hand_game.py start               # writes the game, prints 2 export lines: run them
+P="python3 $HOME/IncTrainer/incidenttrainer/agent/dev/play.py"
+$P state                                        # BOOTING until the server is up (~3 min), then READY
+uv run scripts/hand_game.py status $ITR_GAME_ID  # what the gateway copied into DynamoDB
+(cd $L && images/test-server.sh stop)           # when done
+```
+
+Grafana doesn't open through `/s/<id>/grafana/` on AWS yet: the agent must start Grafana with
+the game's address at claim (agent step 10). Everything else is the real path.
 
 ## The broker (contract 5)
 
