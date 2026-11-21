@@ -5,7 +5,7 @@ Settings (environment variables; systemd sets them on the gateway server):
   ITR_DEV_GAMES        laptop instead of ITR_TABLE: JSON file {"games": {"<id>": {META}}}
   ITR_COOKIE_KEYS      laptop: the CONFIG/COOKIE_KEYS item as JSON (overrides the table's)
   ITR_PUBLIC_ORIGIN    e.g. https://drer7le45ultl.cloudfront.net (terminal WebSocket check)
-  ITR_SANDBOX_CIDRS    default 10.20.0.0/20; comma-separated. Never forward anywhere else.
+  ITR_SANDBOX_CIDRS    default: the 3 sandbox subnets (infra/modules/network); never forward elsewhere
   ITR_COOKIE_INSECURE  1 = laptop cookie `itr_game` (no __Secure- prefix)
   ITR_DEV_LOGIN        1 = laptop: /dev-login sets a game cookie in a browser (never on a server)
   ITR_LAB_BUCKET       the lab content bucket (runbooks): turns the broker on
@@ -18,13 +18,16 @@ import logging
 import os
 import sys
 
+# The sandbox subnets in zones a, b, c (infra/modules/network). The gateway forwards only here.
+SANDBOX_CIDRS = "10.20.0.0/20,10.20.32.0/20,10.20.48.0/20"
+
 
 def settings_from_env(env: dict[str, str]):
     from itr_gateway.app import Settings
 
     cidrs = [
         part.strip()
-        for part in env.get("ITR_SANDBOX_CIDRS", "10.20.0.0/20").split(",")
+        for part in env.get("ITR_SANDBOX_CIDRS", SANDBOX_CIDRS).split(",")
         if part.strip()
     ]
     return Settings(

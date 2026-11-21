@@ -10,11 +10,12 @@ State: `s3://itr-tfstate-557541683274/envs/main/terraform.tfstate` (native locki
 
 | Part | Cost |
 | --- | --- |
-| Network: VPC, 2 private subnets, S3 and DynamoDB gateway endpoints, EC2 Instance Connect Endpoint, security groups, an internet gateway with **no routes** (CloudFront VPC origins require one) | $0 |
+| Network: VPC, private subnets (sandboxes in zones a/b/c, platform in a), S3 and DynamoDB gateway endpoints, EC2 Instance Connect Endpoint, security groups, an internet gateway with **no routes** (CloudFront VPC origins require one) | $0 |
 | Website: private S3 bucket, CloudFront (OAC, SPA routing function, security headers) | ~$0 (CloudFront free tier) |
 | Data: DynamoDB table `itr-main` (on-demand, TTL, point-in-time recovery, deletion protection) | cents |
 | API: Lambda `itr-main-api` (FastAPI, arm64) behind an HTTP API, reached through CloudFront `/api/*` | cents |
 | Labs: private bucket `itr-main-labs-<account>` (`labs/<lab>/v<version>/{card,runbook,debrief}.json`), versioned, HTTPS only | cents |
+| Sandbox: launch template `itr-main-teapot-basic` (image from SSM, no role, no user data, IMDSv2 hop 1, shutdown = terminate); the launcher adds the subnet and, if needed, a fallback type | $0 until a game runs (~3 cents a game) |
 | Gateway: t4g.micro `itr-main-gateway` in the platform subnet from the gateway image (SSM `/itr/gateway/ami`), role for the game table + runbooks only, CloudFront `/s/*` through a VPC origin | ~$7.80/month |
 
 Website address: `terraform output -raw website_url` (a `*.cloudfront.net` address until the domain is bought).

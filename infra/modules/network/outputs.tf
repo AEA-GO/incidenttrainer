@@ -6,6 +6,18 @@ output "sandbox_subnet_id" {
   value = aws_subnet.sandboxes.id
 }
 
+output "sandbox_subnets" {
+  description = "Every sandbox subnet, first zone first: [{id, az, cidr}]."
+  value = concat(
+    [{ id = aws_subnet.sandboxes.id, az = aws_subnet.sandboxes.availability_zone, cidr = aws_subnet.sandboxes.cidr_block }],
+    [for az in var.more_sandbox_azs : {
+      id   = aws_subnet.sandboxes_more[az].id
+      az   = az
+      cidr = aws_subnet.sandboxes_more[az].cidr_block
+    }],
+  )
+}
+
 output "platform_subnet_id" {
   value = aws_subnet.platform.id
 }
