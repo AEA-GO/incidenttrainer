@@ -1,5 +1,5 @@
 # The one AWS environment of the MVP ("main"). Applied by CI after merge, never by hand.
-# Planned next: the API's launcher permissions, the cleanup Lambda.
+# Planned next: the API's game endpoints, the cleanup Lambda.
 
 locals {
   # The address players use. Written as text, not read from the website module, because
@@ -19,10 +19,12 @@ module "data" {
 }
 
 module "api" {
-  source     = "../../modules/api"
-  name       = "itr-main"
-  table_name = module.data.table_name
-  table_arn  = module.data.table_arn
+  source               = "../../modules/api"
+  name                 = "itr-main"
+  table_name           = module.data.table_name
+  table_arn            = module.data.table_arn
+  sandbox_subnet_ids   = [for subnet in module.network.sandbox_subnets : subnet.id]
+  launch_template_arns = [for lt in module.sandbox.launch_templates : lt.arn]
 }
 
 module "labs" {
