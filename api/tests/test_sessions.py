@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import boto3
 import pytest
@@ -424,3 +425,104 @@ def test_lambda_handler_returns_the_cookie_to_the_http_api(env):
     reply = main.handler(event, None)
     assert reply["statusCode"] == 201
     assert any(c.startswith("__Secure-itr_game=v1.") for c in reply["cookies"])
+
+
+# ----- finish ------------------------------------------------------------------------------
+def play_good_game(table, game_id):
+    """Put example 1's agent and gateway events on the game and end it, as the gateway would."""
+    from test_score import GOOD
+
+    with table.batch_writer() as batch:
+        for event in GOOD:
+            if event["by"] == "api":
+                continue  # the API wrote its own already
+            item = json.loads(json.dumps(event), parse_float=Decimal)
+            batch.put_item(
+                Item=item
+                | {
+                    "pk": f"GAME#{game_id}",
+                    "sk": f"EV#{event['by']}#{event['seq']:06d}",
+                }
+            )
+    table.update_item(
+        Key={"pk": f"GAME#{game_id}", "sk": "META"},
+        UpdateExpression="SET #s = :ended, end_reason = :r",
+        ExpressionAttributeNames={"#s": "state"},
+        ExpressionAttributeValues={":ended": "ended", ":r": "resolved"},
+    )
+
+
+def test_finish_before_the_end_says_not_ended(env):
+    _, launcher, client = env
+    game_id = start(client).json()["game_id"]
+    reply = client.post(
+        f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": CODE}
+    )
+    assert reply.status_code == 409
+    assert (
+        reply.json()["error"]["code"] == "not_ended"
+        and reply.headers["retry-after"] == "3"
+    )
+    assert launcher.list()  # the server is untouched
+
+
+def test_finish_deletes_the_server_scores_once_and_repeats_the_result(env):
+    table, launcher, client = env
+    game_id = start(client).json()["game_id"]
+    play_good_game(table, game_id)
+    first = client.post(
+        f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": CODE}
+    )
+    assert first.status_code == 200, first.text
+    result = first.json()
+    assert result["scored"] and result["score"] == 98 and result["grade"] == "S"
+    assert launcher.list() == []  # the server is gone
+    meta = item(table, f"GAME#{game_id}", "META")
+    assert meta["score"] == 98 and meta["grade"] == "S" and meta["server_terminated_at"]
+    code_game = item(table, f"CODE#{CODE}", f"GAME#{meta['created_at']}#{game_id}")
+    assert (code_game["score"], code_game["grade"], code_game["state"]) == (
+        98,
+        "S",
+        "ended",
+    )
+    terminated = item(table, f"GAME#{game_id}", "EV#api#000003")
+    assert (
+        terminated["type"] == "server_terminated"
+        and terminated["data"]["reason"] == "finished"
+    )
+
+    again = client.post(
+        f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": CODE}
+    )
+    assert again.json() == result
+    status = client.get(
+        f"/api/sessions/{game_id}", headers={"X-Invite-Code": CODE}
+    ).json()
+    assert status["scored"] is True and status["end_reason"] == "resolved"
+
+
+def test_finish_needs_the_starting_code(env):
+    table, _, client = env
+    game_id = start(client).json()["game_id"]
+    table.put_item(
+        Item={"pk": "CODE#AAAAAAAA", "sk": "META", "active": True, "games_total": 6}
+    )
+    reply = client.post(
+        f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": "AAAAAAAA"}
+    )
+    assert reply.status_code == 401
+
+
+def test_finish_of_a_failed_start_is_not_scored(env):
+    table, launcher, client = env
+    launcher.fail_with = "capacity"
+    start(client)
+    game_id = table.query(
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :g)",
+        ExpressionAttributeValues={":pk": f"CODE#{CODE}", ":g": "GAME#"},
+    )["Items"][0]["game_id"]
+    reply = client.post(
+        f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": CODE}
+    )
+    assert reply.status_code == 200
+    assert reply.json() == {"version": "score-v0.2", "scored": False, "why": "failed"}

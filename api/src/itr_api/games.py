@@ -390,3 +390,97 @@ class GameStore:
                 "expires_at": int(now) + GAME_TTL_S,
             }
         )
+
+    # ----- finish (contract 3): server gone, score saved -------------------------------
+    def events(self, game_id: str) -> list[dict]:
+        args: dict = {
+            "KeyConditionExpression": "pk = :pk AND begins_with(sk, :ev)",
+            "ExpressionAttributeValues": {":pk": f"GAME#{game_id}", ":ev": "EV#"},
+            "ConsistentRead": True,
+        }
+        found = []
+        while True:
+            reply = self.table.query(**args)
+            for item in reply.get("Items", []):
+                event = plain(item)
+                found.append(
+                    {k: event.get(k) for k in ("seq", "at", "t", "by", "type", "data")}
+                )
+            if "LastEvaluatedKey" not in reply:
+                return found
+            args["ExclusiveStartKey"] = reply["LastEvaluatedKey"]
+
+    def result(self, game_id: str) -> dict | None:
+        item = self._get(f"GAME#{game_id}", "RESULT", consistent=True)
+        return json.loads(item["result_json"]) if item else None
+
+    def mark_terminated(self, game_id: str) -> bool:
+        """Note that the server is gone (the gateway then answers 410). True only the first time."""
+        from botocore.exceptions import ClientError
+
+        try:
+            self.table.update_item(
+                Key={"pk": f"GAME#{game_id}", "sk": "META"},
+                UpdateExpression="SET server_terminated_at = :at",
+                ConditionExpression="attribute_exists(pk) AND attribute_not_exists(server_terminated_at)",
+                ExpressionAttributeValues={":at": iso_ms(self.clock())},
+            )
+            return True
+        except ClientError as error:
+            if (
+                error.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                return False
+            raise
+
+    def save_result(self, game_id: str, meta: dict, result: dict) -> dict:
+        """Write RESULT once; a second finish gets the first result back (idempotent)."""
+        from botocore.exceptions import ClientError
+
+        now = self.clock()
+        try:
+            self.table.put_item(
+                Item={
+                    "pk": f"GAME#{game_id}",
+                    "sk": "RESULT",
+                    "result_json": json.dumps(result),  # exact round trip (no Decimals)
+                    "expires_at": int(now) + GAME_TTL_S,
+                },
+                ConditionExpression="attribute_not_exists(pk)",
+            )
+        except ClientError as error:
+            if (
+                error.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+            return self.result(game_id) or result
+        summary = {
+            ":at": iso_ms(now),
+            ":score": result.get("score"),
+            ":grade": result.get("grade"),
+        }
+        self.table.update_item(
+            Key={"pk": f"GAME#{game_id}", "sk": "META"},
+            UpdateExpression="SET scored_at = :at, score = :score, grade = :grade",
+            ExpressionAttributeValues=summary,
+        )
+        if meta.get("code") and meta.get(
+            "created_at"
+        ):  # the code's list of games (labs page "done")
+            self.table.update_item(
+                Key={
+                    "pk": f"CODE#{meta['code']}",
+                    "sk": f"GAME#{meta['created_at']}#{game_id}",
+                },
+                UpdateExpression="SET score = :score, grade = :grade, #state = :ended",
+                ConditionExpression="attribute_exists(pk)",
+                ExpressionAttributeNames={"#state": "state"},
+                ExpressionAttributeValues={
+                    ":score": result.get("score"),
+                    ":grade": result.get("grade"),
+                    ":ended": "ended",
+                },
+            )
+        return result
