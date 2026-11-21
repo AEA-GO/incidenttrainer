@@ -1,5 +1,5 @@
 # The one AWS environment of the MVP ("main"). Applied by CI after merge, never by hand.
-# Planned next: the server launcher (launch template), the cleanup Lambda.
+# Planned next: the API's launcher permissions, the cleanup Lambda.
 
 locals {
   # The address players use. Written as text, not read from the website module, because
@@ -40,6 +40,12 @@ module "gateway" {
   labs_bucket       = module.labs.bucket
   labs_bucket_arn   = module.labs.bucket_arn
   public_origin     = local.public_origin
+}
+
+module "sandbox" {
+  source            = "../../modules/sandbox"
+  name              = "itr-main"
+  security_group_id = module.network.security_group_ids.sandbox
 }
 
 module "website" {

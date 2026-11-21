@@ -36,3 +36,12 @@ output "labs_bucket" {
 output "gateway_instance_id" {
   value = module.gateway.instance_id
 }
+
+output "sandbox_subnets" {
+  description = "For the launcher: every sandbox subnet, first zone first."
+  value       = module.network.sandbox_subnets
+}
+
+output "launch_templates" {
+  value = module.sandbox.launch_templates
+}

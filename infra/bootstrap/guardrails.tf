@@ -24,10 +24,11 @@ data "aws_iam_policy_document" "guardrails" {
     effect    = "Deny"
     actions   = ["ec2:RunInstances"]
     resources = ["arn:aws:ec2:*:*:instance/*"]
+    # m7g/m6g.medium: the launcher's fallback when AWS is out of t4g.medium (decided 21 Nov).
     condition {
       test     = "StringNotEquals"
       variable = "ec2:InstanceType"
-      values   = ["t4g.nano", "t4g.micro", "t4g.small", "t4g.medium"]
+      values   = ["t4g.nano", "t4g.micro", "t4g.small", "t4g.medium", "m7g.medium", "m6g.medium"]
     }
   }
 

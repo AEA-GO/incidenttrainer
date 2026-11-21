@@ -148,8 +148,14 @@ def test_ended_game_without_a_server(world, gone) -> None:
         refused(world.browser(path), 410, "ended")
 
 
+@pytest.mark.parametrize("ip", ["10.20.33.7", "10.20.63.254"])
+def test_forwards_to_game_servers_in_zones_b_and_c(world, ip) -> None:
+    world.put(private_ip=ip)
+    forwarded(world.auth(API + "state"), 8080, ip=ip)
+
+
 @pytest.mark.parametrize(
-    "ip", ["10.20.16.5", "127.0.0.1", "169.254.169.254", "not-an-ip"]
+    "ip", ["10.20.16.5", "10.20.64.1", "127.0.0.1", "169.254.169.254", "not-an-ip"]
 )
 def test_never_forwards_outside_the_sandbox_subnet(world, ip) -> None:
     world.put(private_ip=ip)

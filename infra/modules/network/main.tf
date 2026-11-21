@@ -1,7 +1,9 @@
-# IncidentTrainer network: two private subnets, no NAT, no route to the internet.
+# IncidentTrainer network: private subnets (sandboxes in three zones, one platform subnet),
+# no NAT, no route to the internet.
 #
-#   sandboxes subnet - one EC2 per game. Its route table has only the local route and
-#                      no endpoints: game servers cannot reach anything outside the VPC.
+#   sandbox subnets  - one EC2 per game, in zones a, b and c (capacity fallback). Their
+#                      route table has only the local route and no endpoints: game
+#                      servers cannot reach anything outside the VPC.
 #   platform subnet  - the gateway EC2 (a CloudFront VPC origin) and the EC2 Instance
 #                      Connect Endpoint. Reaches S3 and DynamoDB through free gateway
 #                      endpoints only.
@@ -55,6 +57,18 @@ resource "aws_subnet" "sandboxes" {
   tags                    = { Name = "${var.name}-sandboxes", tier = "sandbox" }
 }
 
+# The same kind of subnet in two more zones, so a game can start when AWS has no capacity
+# in the first one (decided 21 Nov). Same route table: local only. Cross-zone traffic to the
+# gateway costs $0.01/GB each way (~0.1 cent per game).
+resource "aws_subnet" "sandboxes_more" {
+  for_each                = { for i, az in var.more_sandbox_azs : az => i + 2 }
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = cidrsubnet(var.cidr, 4, each.value) # 10.20.32.0/20, 10.20.48.0/20
+  availability_zone       = each.key
+  map_public_ip_on_launch = false
+  tags                    = { Name = "${var.name}-sandboxes-${substr(each.key, -1, 1)}", tier = "sandbox" }
+}
+
 resource "aws_subnet" "platform" {
   vpc_id                  = aws_vpc.this.id
   cidr_block              = cidrsubnet(var.cidr, 8, 16) # 10.20.16.0/24
@@ -75,6 +89,12 @@ resource "aws_route_table" "platform" {
 
 resource "aws_route_table_association" "sandboxes" {
   subnet_id      = aws_subnet.sandboxes.id
+  route_table_id = aws_route_table.sandboxes.id
+}
+
+resource "aws_route_table_association" "sandboxes_more" {
+  for_each       = aws_subnet.sandboxes_more
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.sandboxes.id
 }
 

@@ -64,7 +64,9 @@ class Settings:
     public_origin: str | None = (
         None  # e.g. https://drer7le45ultl.cloudfront.net (WebSocket Origin check)
     )
-    sandbox_cidrs: list[str] = field(default_factory=lambda: ["10.20.0.0/20"])
+    sandbox_cidrs: list[str] = field(
+        default_factory=lambda: ["10.20.0.0/20", "10.20.32.0/20", "10.20.48.0/20"]
+    )  # the sandbox subnets in zones a, b, c
     insecure_cookie: bool = False  # laptops only: cookie `itr_game` without __Secure-
     dev_login: bool = False  # laptops only: /dev-login sets a cookie for any game
     dev_kid: str = "k1"  # the key /dev-login signs with
