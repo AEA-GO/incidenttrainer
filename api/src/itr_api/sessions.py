@@ -23,12 +23,16 @@ from itr_api.errors import NO_STORE, ApiError
 from itr_api.games import GameStore, NewGame, Refused, seconds_to_kyiv_midnight
 from itr_api.labs import Labs
 from itr_api.launcher import Launcher, LaunchError, ServerSpec
+from itr_api.score import score
 
 router = APIRouter(prefix="/api")
 
 GAME_ID = re.compile(r"^[A-Za-z0-9_-]{22}$")
 BUSY_RETRY_S = 600  # contract 3: all_servers_busy, "about 10 min"
 START_RETRY_S = 30
+NOT_ENDED_RETRY_S = (
+    3  # the gateway marks a game ended a few seconds after the agent does
+)
 
 
 def log(event: str, **fields) -> None:
@@ -237,16 +241,11 @@ def _give_back(deps: Deps, game: NewGame, error: Exception) -> None:
         )
 
 
-@router.get("/sessions/{game_id}")
-def game_status(
-    game_id: str,
-    response: Response,
-    deps: DepsArg,
-    x_invite_code: InviteCode = None,
-) -> dict:
+def game_of(deps: Deps, game_id: str, header: str | None) -> dict:
+    """The game's META, only for the invite code that started it."""
     if not GAME_ID.match(game_id):
         raise ApiError("not_found")
-    code = codes.normalise(x_invite_code)
+    code = codes.normalise(header)
     if code is None:
         raise ApiError("bad_code")
     meta = deps.store.meta(game_id)
@@ -254,6 +253,65 @@ def game_status(
         raise ApiError("not_found")
     if meta.get("code") != code:
         raise ApiError("bad_code")  # not the code that started this game
+    return meta
+
+
+@router.post("/sessions/{game_id}/finish")
+def finish(
+    game_id: str, response: Response, deps: DepsArg, x_invite_code: InviteCode = None
+) -> dict:
+    """Delete the server, score the game, save the result. Safe to call again (contract 3).
+
+    The cleanup Lambda will call `finish_game` for games whose browser has gone."""
+    meta = game_of(deps, game_id, x_invite_code)
+    response.headers.update(NO_STORE)
+    return finish_game(deps, game_id, meta)
+
+
+def finish_game(deps: Deps, game_id: str, meta: dict) -> dict:
+    if meta.get("state") != "ended":
+        raise ApiError("not_ended", NOT_ENDED_RETRY_S)
+    if meta.get("instance_id") and not meta.get("server_terminated_at"):
+        deps.launcher.stop(
+            str(meta["instance_id"])
+        )  # never touches a server without our game tag
+        if deps.store.mark_terminated(game_id):
+            created = datetime.fromisoformat(str(meta.get("created_at"))).timestamp()
+            deps.store.event(
+                game_id,
+                "server_terminated",
+                {
+                    "reason": "finished",
+                    "lifetime_s": max(int(deps.clock() - created), 0),
+                },
+            )
+            log("server_terminated", game_id=game_id, server_id=meta["instance_id"])
+    done = deps.store.result(game_id)
+    if done is not None:
+        return done
+    result = score(
+        meta.get("scoring") or {"level": "intern", "target_time_s": 300},
+        deps.store.events(game_id),
+    )
+    saved = deps.store.save_result(game_id, meta, result)
+    log(
+        "scored",
+        game_id=game_id,
+        scored=saved.get("scored"),
+        score=saved.get("score"),
+        grade=saved.get("grade"),
+    )
+    return saved
+
+
+@router.get("/sessions/{game_id}")
+def game_status(
+    game_id: str,
+    response: Response,
+    deps: DepsArg,
+    x_invite_code: InviteCode = None,
+) -> dict:
+    meta = game_of(deps, game_id, x_invite_code)
     state = str(meta.get("state"))
     created = meta.get("created_at")
     seconds = 0
