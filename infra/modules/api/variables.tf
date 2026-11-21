@@ -21,3 +21,12 @@ variable "launch_template_arns" {
   description = "The game servers' launch templates (modules/sandbox)."
   type        = list(string)
 }
+
+variable "labs_bucket" {
+  description = "The private lab bucket (modules/labs): the API reads lab cards from it."
+  type        = string
+}
+
+variable "labs_bucket_arn" {
+  type = string
+}

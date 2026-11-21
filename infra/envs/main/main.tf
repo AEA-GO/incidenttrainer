@@ -25,6 +25,8 @@ module "api" {
   table_arn            = module.data.table_arn
   sandbox_subnet_ids   = [for subnet in module.network.sandbox_subnets : subnet.id]
   launch_template_arns = [for lt in module.sandbox.launch_templates : lt.arn]
+  labs_bucket          = module.labs.bucket
+  labs_bucket_arn      = module.labs.bucket_arn
 }
 
 module "labs" {
