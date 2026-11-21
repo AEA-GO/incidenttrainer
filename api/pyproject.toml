@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
     "mangum>=0.19",
+    "tzdata>=2026.6",
 ]
 
 [dependency-groups]

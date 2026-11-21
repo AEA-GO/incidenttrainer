@@ -52,6 +52,14 @@ data "aws_iam_policy_document" "api" {
     resources = [var.table_arn]
   }
   statement {
+    sid     = "ReadLabCards" # public card + scoring only; never the runbook
+    actions = ["s3:GetObject"]
+    resources = [
+      "${var.labs_bucket_arn}/labs/*/current",
+      "${var.labs_bucket_arn}/labs/*/card.json",
+    ]
+  }
+  statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.api.arn}:*"]
@@ -218,7 +226,7 @@ resource "aws_lambda_function" "api" {
   handler       = "itr_api.main.handler"
   filename      = data.archive_file.placeholder.output_path
   memory_size   = 512 # more memory = more CPU = faster cold starts; still inside the free tier
-  timeout       = 15
+  timeout       = 25  # Start shift: launch (up to ~11 s with capacity fallback) + DynamoDB; HTTP API caps at 30
 
   environment {
     variables = {
@@ -226,6 +234,7 @@ resource "aws_lambda_function" "api" {
       ITR_LAUNCHER        = "ec2"
       ITR_SANDBOX_SUBNETS = join(",", var.sandbox_subnet_ids) # zone a first
       ITR_TEMPLATE_PREFIX = "${var.name}-"
+      ITR_LABS_BUCKET     = var.labs_bucket
     }
   }
 

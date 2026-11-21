@@ -1,6 +1,7 @@
 """FakeLauncher: game servers in memory, for tests (contract 4). It can be told to fail."""
 
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
@@ -15,6 +16,7 @@ class FakeLauncher:
     servers: dict[str, Server] = field(default_factory=dict)
     started: list[str] = field(default_factory=list)  # game ids, in order
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
+    now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
 
     def start(self, spec: ServerSpec) -> Server:
         for server in self.servers.values():
@@ -30,7 +32,7 @@ class FakeLauncher:
             world=spec.world,
             address=f"10.20.0.{10 + number}",
             state="running",
-            launched_at=datetime.now(UTC),
+            launched_at=self.now(),
             expires_at=spec.expires_at,
             instance_type="t4g.medium",
             zone="eu-central-1a",

@@ -10,6 +10,8 @@ import boto3
 from fastapi import FastAPI
 from mangum import Mangum
 
+from itr_api import errors, sessions
+
 _version_file = Path(__file__).with_name("VERSION")  # written by CI at build time
 VERSION = _version_file.read_text().strip() if _version_file.exists() else "dev"
 
@@ -20,6 +22,8 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
     redoc_url=None,
 )
+errors.install(app)
+app.include_router(sessions.router)
 
 _table = None
 
