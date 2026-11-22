@@ -56,6 +56,15 @@ export const game = {
   state: (id: string) => agent<AgentState>(id, "GET", "/state"),
   ack: (id: string) => agent<{ t: number }>(id, "POST", "/ack"),
   resolve: (id: string) => agent<ResolveReply>(id, "POST", "/resolve"),
-  giveUp: (id: string) => agent<unknown>(id, "POST", "/give-up"),
+  giveUp: (id: string) => agent<unknown>(id, "POST", "/give-up", { confirm: true }), // contract 2 requires it
   scene: (id: string) => agent<Scene>(id, "GET", "/scene"),
+  // Grafana's own health check, through the gateway (the game cookie covers /s/<id>/grafana/).
+  grafanaReady: async (id: string): Promise<boolean> => {
+    try {
+      const reply = await fetch(`/s/${encodeURIComponent(id)}/grafana/api/health`, { credentials: "same-origin" });
+      return reply.ok;
+    } catch {
+      return false;
+    }
+  },
 };

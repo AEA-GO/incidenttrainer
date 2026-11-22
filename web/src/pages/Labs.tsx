@@ -50,7 +50,7 @@ export function Labs() {
                     </span>
                     <span className="font-mono text-sm">
                       {lab.done ? (
-                        <span className="text-good">● Done · {lab.done.score} · {lab.done.grade}</span>
+                        <span className="text-muted">Best · {lab.done.score} · {lab.done.grade}</span>
                       ) : (
                         <span className="text-faint">Not played</span>
                       )}
