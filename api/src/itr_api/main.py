@@ -3,6 +3,7 @@
 Locally: `uv run fastapi dev src/itr_api/main.py` (needs `uv add --dev "fastapi[standard]"`), or the tests.
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -96,7 +97,22 @@ def launcher_check() -> dict:
 _http = Mangum(app, lifespan="off")
 
 
+def alert(text: str) -> None:
+    """To the Alerts topic (Telegram + email), when ITR_ALERTS_TOPIC is set."""
+    topic = os.environ.get("ITR_ALERTS_TOPIC")
+    print(json.dumps({"event": "alert", "text": text}))
+    if topic:
+        boto3.client("sns").publish(
+            TopicArn=topic, Subject="IncidentTrainer cleanup", Message=text[:1000]
+        )
+
+
 def handler(event, context):
+    # Direct invokes only (an HTTP request never looks like these): the scheduler and admins.
+    if isinstance(event, dict) and event.get("itr_cleanup") is True:
+        from itr_api import cleanup
+
+        return cleanup.run(sessions.get_deps(), alert)
     if isinstance(event, dict) and event.get("itr_admin") == "launcher_check":
         return launcher_check()
     return _http(event, context)
