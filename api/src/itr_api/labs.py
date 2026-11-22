@@ -52,11 +52,42 @@ def parse_current(text: str) -> int:
     return int(text.strip().removeprefix("v"))
 
 
+def course_labs(data) -> list[str]:
+    """`course/<id>.json` lists lab ids in order: a list, or {"labs": [...]}."""
+    labs = data.get("labs", []) if isinstance(data, dict) else data
+    return [str(lab) for lab in labs]
+
+
+def lab_view(card: LabCard) -> dict:
+    """The public LabCard of contract 3 (never anything from the runbook or debrief)."""
+    c = card.card
+    return {
+        "id": card.id,
+        "order": int((card.course or {}).get("order", 0)),
+        "title": c.get("title", ""),
+        "hook": c.get("hook", ""),
+        "level": card.level,
+        "minutes": int(c.get("minutes", 0)),
+        "skills": list(c.get("skills", [])),
+        "tools": list(c.get("tools", [])),
+        "terminal": card.terminal,
+        "handover_note": c.get("handover_note", ""),
+    }
+
+
 class Labs(Protocol):
     def card(self, lab_id: str) -> LabCard | None: ...
+    def card_at(self, lab_id: str, version: int) -> LabCard | None: ...
+    def debrief(self, lab_id: str, version: int) -> dict | None: ...
+    def course(self, course_id: str) -> list[str] | None: ...
 
 
 class S3Labs:
+    """Reads are cached per Lambda container: `current` and courses for a minute, versioned
+    files longer (a published version never changes, contract 1)."""
+
+    VERSIONED_CACHE_S = 600
+
     def __init__(
         self, bucket: str, s3=None, clock: Callable[[], float] = time.monotonic
     ):
@@ -65,7 +96,7 @@ class S3Labs:
 
             s3 = boto3.client("s3")
         self.bucket, self.s3, self.clock = bucket, s3, clock
-        self._cache: dict[str, tuple[float, LabCard | None]] = {}
+        self._cache: dict[str, tuple[float, object]] = {}
 
     def _read(self, key: str) -> bytes | None:
         try:
@@ -80,28 +111,72 @@ class S3Labs:
                 return None
             raise
 
+    def _cached(self, key: str, ttl: float, parse: Callable[[bytes], object]) -> object:
+        hit = self._cache.get(key)
+        if hit and self.clock() - hit[0] < ttl:
+            return hit[1]
+        body = self._read(key)
+        value = parse(body) if body is not None else None
+        self._cache[key] = (self.clock(), value)
+        return value
+
     def card(self, lab_id: str) -> LabCard | None:
         if not LAB_ID.match(lab_id):
             return None
-        cached = self._cache.get(lab_id)
-        if cached and self.clock() - cached[0] < CACHE_S:
-            return cached[1]
-        current = self._read(f"labs/{lab_id}/current")
-        found = None
-        if current is not None:
-            version = parse_current(current.decode())
-            body = self._read(f"labs/{lab_id}/v{version}/card.json")
-            if body is not None:
-                found = card_from_json(json.loads(body))
-        self._cache[lab_id] = (self.clock(), found)
-        return found
+        version = self._cached(
+            f"labs/{lab_id}/current", CACHE_S, lambda b: parse_current(b.decode())
+        )
+        return None if version is None else self.card_at(lab_id, int(version))
+
+    def card_at(self, lab_id: str, version: int) -> LabCard | None:
+        if not LAB_ID.match(lab_id):
+            return None
+        key = f"labs/{lab_id}/v{int(version)}/card.json"
+        return self._cached(
+            key, self.VERSIONED_CACHE_S, lambda b: card_from_json(json.loads(b))
+        )
+
+    def debrief(self, lab_id: str, version: int) -> dict | None:
+        """Only for games that have ended (the caller checks)."""
+        if not LAB_ID.match(lab_id):
+            return None
+        key = f"labs/{lab_id}/v{int(version)}/debrief.json"
+        return self._cached(
+            key,
+            self.VERSIONED_CACHE_S,
+            lambda b: dict(json.loads(b).get("debrief", {})),
+        )
+
+    def course(self, course_id: str) -> list[str] | None:
+        if not LAB_ID.match(course_id):
+            return None
+        return self._cached(
+            f"course/{course_id}.json", CACHE_S, lambda b: course_labs(json.loads(b))
+        )
 
 
 class DictLabs:
-    """Cards in memory (tests, laptops)."""
+    """Labs in memory (tests, laptops)."""
 
-    def __init__(self, cards: list[LabCard]):
+    def __init__(
+        self,
+        cards: list[LabCard],
+        debriefs: dict | None = None,
+        courses: dict | None = None,
+    ):
         self.cards = {card.id: card for card in cards}
+        self.debriefs = debriefs or {}  # (lab_id, version) -> debrief
+        self.courses = courses or {}  # course_id -> [lab ids]
 
     def card(self, lab_id: str) -> LabCard | None:
         return self.cards.get(lab_id)
+
+    def card_at(self, lab_id: str, version: int) -> LabCard | None:
+        card = self.cards.get(lab_id)
+        return card if card and card.version == version else None
+
+    def debrief(self, lab_id: str, version: int) -> dict | None:
+        return self.debriefs.get((lab_id, version))
+
+    def course(self, course_id: str) -> list[str] | None:
+        return self.courses.get(course_id)

@@ -29,6 +29,14 @@ CARD = {
 }
 
 
+DEBRIEF = {
+    "summary": "A fictional flag broke search.",
+    "root_cause": "A flag.",
+    "expert": {"time_s": 240, "timeline": [], "commands": []},
+    "lessons": ["Check recent changes first."],
+}
+
+
 @pytest.fixture
 def env():
     with mock_aws():
@@ -65,7 +73,11 @@ def env():
         launcher = FakeLauncher(now=lambda: datetime.fromtimestamp(NOW, UTC))
         deps = sessions.Deps(
             store=GameStore(table, clock=lambda: NOW),
-            labs=DictLabs([card_from_json(CARD)]),
+            labs=DictLabs(
+                [card_from_json(CARD)],
+                debriefs={("example-lab", 3): DEBRIEF},
+                courses={"example-course": ["example-lab", "example-lab-2"]},
+            ),
             launcher=launcher,
             clock=lambda: NOW,
         )
@@ -526,3 +538,180 @@ def test_finish_of_a_failed_start_is_not_scored(env):
     )
     assert reply.status_code == 200
     assert reply.json() == {"version": "score-v0.2", "scored": False, "why": "failed"}
+
+
+# ----- results and feedback ----------------------------------------------------------------
+def finished_good_game(table, client):
+    game_id = start(client).json()["game_id"]
+    play_good_game(table, game_id)
+    assert (
+        client.post(
+            f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": CODE}
+        ).status_code
+        == 200
+    )
+    return game_id
+
+
+def test_results_only_after_the_end_and_the_score(env):
+    table, _, client = env
+    game_id = start(client).json()["game_id"]
+    reply = client.get(f"/api/results/{game_id}", headers={"X-Invite-Code": CODE})
+    assert reply.status_code == 409 and reply.json()["error"]["code"] == "not_ended"
+    play_good_game(table, game_id)
+    reply = client.get(f"/api/results/{game_id}", headers={"X-Invite-Code": CODE})
+    assert (
+        reply.status_code == 409 and reply.json()["error"]["code"] == "not_scored_yet"
+    )
+
+
+def test_results_page_payload(env):
+    table, _, client = env
+    game_id = finished_good_game(table, client)
+    reply = client.get(f"/api/results/{game_id}", headers={"X-Invite-Code": CODE})
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert (
+        body["game_id"] == game_id
+        and body["nickname"] == "Andrii"
+        and body["end_reason"] == "resolved"
+    )
+    assert body["score"]["score"] == 98 and body["score"]["grade"] == "S"
+    assert body["lab"] == {
+        "id": "example-lab",
+        "order": 1,
+        "title": "Tuesday afternoon errors",
+        "hook": "",
+        "level": "intern",
+        "minutes": 15,
+        "skills": [],
+        "tools": [],
+        "terminal": False,
+        "handover_note": "",
+    }
+    assert body["debrief"] == DEBRIEF
+    assert body["next_lab_id"] == "example-lab-2"
+    assert body["feedback_given"] is False
+    times = [e["t"] for e in body["events"]]
+    assert times == sorted(times) and None not in times and times[0] == 0
+    types = {e["type"] for e in body["events"]}
+    assert (
+        "game_created" not in types and "server_terminated" not in types
+    )  # no game time
+    reply = next(e for e in body["events"] if e["type"] == "chat_reply")
+    assert reply["data"]["tone"] == "honest"  # hidden fields may be shown after the end
+
+
+def test_results_need_the_starting_code(env):
+    table, _, client = env
+    game_id = finished_good_game(table, client)
+    assert client.get(f"/api/results/{game_id}").status_code == 401
+    table.put_item(
+        Item={"pk": "CODE#AAAAAAAA", "sk": "META", "active": True, "games_total": 6}
+    )
+    assert (
+        client.get(
+            f"/api/results/{game_id}", headers={"X-Invite-Code": "AAAAAAAA"}
+        ).status_code
+        == 401
+    )
+
+
+def test_no_results_and_no_debrief_for_an_unscored_game(env):
+    table, launcher, client = env
+    launcher.fail_with = "capacity"
+    start(client)
+    game_id = table.query(
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :g)",
+        ExpressionAttributeValues={":pk": f"CODE#{CODE}", ":g": "GAME#"},
+    )["Items"][0]["game_id"]
+    client.post(f"/api/sessions/{game_id}/finish", headers={"X-Invite-Code": CODE})
+    reply = client.get(f"/api/results/{game_id}", headers={"X-Invite-Code": CODE})
+    assert reply.status_code == 409 and reply.json()["error"]["code"] == "not_scored"
+    assert "debrief" not in reply.text
+
+
+def test_results_with_missing_lab_files_is_our_error(env):
+    table, _, client = env
+    game_id = finished_good_game(table, client)
+    main.app.dependency_overrides[sessions.get_deps]().labs.debriefs.clear()
+    reply = client.get(f"/api/results/{game_id}", headers={"X-Invite-Code": CODE})
+    assert reply.status_code == 500 and reply.json()["error"]["code"] == "internal"
+
+
+def test_feedback_saved_and_replaced(env):
+    table, _, client = env
+    game_id = finished_good_game(table, client)
+    url, headers = f"/api/sessions/{game_id}/feedback", {"X-Invite-Code": CODE}
+    assert (
+        client.put(
+            url,
+            json={"replay": 4, "stuck": "  the disk  ", "fake": ""},
+            headers=headers,
+        ).status_code
+        == 204
+    )
+    saved = item(table, f"GAME#{game_id}", "FEEDBACK")
+    assert saved["replay"] == 4 and saved["stuck"] == "the disk" and "fake" not in saved
+    assert client.put(url, json={"replay": 5}, headers=headers).status_code == 204
+    saved = item(table, f"GAME#{game_id}", "FEEDBACK")
+    assert saved["replay"] == 5 and "stuck" not in saved
+    assert (
+        client.get(f"/api/results/{game_id}", headers=headers).json()["feedback_given"]
+        is True
+    )
+
+
+def test_feedback_rules(env):
+    table, _, client = env
+    game_id = start(client).json()["game_id"]
+    url, headers = f"/api/sessions/{game_id}/feedback", {"X-Invite-Code": CODE}
+    assert (
+        client.put(url, json={"replay": 3}, headers=headers).json()["error"]["code"]
+        == "not_ended"
+    )
+    play_good_game(table, game_id)
+    assert client.put(url, json={"replay": 6}, headers=headers).status_code == 400
+    assert (
+        client.put(url, json={"replay": 3, "extra": 1}, headers=headers).status_code
+        == 400
+    )
+    assert (
+        client.put(
+            url, json={"replay": 3, "stuck": "x" * 1001}, headers=headers
+        ).status_code
+        == 400
+    )
+    assert client.put(url, json={"replay": 3}).status_code == 401
+
+
+def test_s3_labs_reads_a_version_debrief_and_course():
+    with mock_aws():
+        s3 = boto3.client("s3", region_name="eu-central-1")
+        s3.create_bucket(
+            Bucket="labs",
+            CreateBucketConfiguration={"LocationConstraint": "eu-central-1"},
+        )
+        s3.put_object(
+            Bucket="labs",
+            Key="labs/example-lab/v3/card.json",
+            Body=json.dumps(CARD).encode(),
+        )
+        s3.put_object(
+            Bucket="labs",
+            Key="labs/example-lab/v3/debrief.json",
+            Body=json.dumps(
+                {"id": "example-lab", "version": 3, "debrief": DEBRIEF}
+            ).encode(),
+        )
+        s3.put_object(
+            Bucket="labs",
+            Key="course/example-course.json",
+            Body=b'{"labs": ["example-lab"]}',
+        )
+        labs = S3Labs("labs", s3=s3)
+        assert labs.card_at("example-lab", 3).version == 3
+        assert labs.debrief("example-lab", 3) == DEBRIEF
+        assert labs.debrief("example-lab", 2) is None
+        assert labs.course("example-course") == ["example-lab"]
+        assert labs.course("nope") is None

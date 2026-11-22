@@ -39,6 +39,14 @@ def test_card_has_only_public_parts():
     assert card["card"]["terminal"] is True
 
 
+def test_debrief_file_has_the_debrief_only():
+    assert load("publish_card").build_debrief(LAB) == {
+        "id": "example-lab",
+        "version": 2,
+        "debrief": {"cause": "the flag"},
+    }
+
+
 def test_card_with_a_secret_word_is_refused():
     lab = LAB | {"card": LAB["card"] | {"hook": "search_v2 broke it"}}
     with pytest.raises(ValueError, match="secret"):

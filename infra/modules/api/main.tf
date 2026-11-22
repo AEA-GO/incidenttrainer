@@ -52,11 +52,13 @@ data "aws_iam_policy_document" "api" {
     resources = [var.table_arn]
   }
   statement {
-    sid     = "ReadLabCards" # public card + scoring only; never the runbook
+    sid     = "ReadLabFiles" # never the runbook; the debrief is sent only after a scored game
     actions = ["s3:GetObject"]
     resources = [
       "${var.labs_bucket_arn}/labs/*/current",
       "${var.labs_bucket_arn}/labs/*/card.json",
+      "${var.labs_bucket_arn}/labs/*/debrief.json",
+      "${var.labs_bucket_arn}/course/*",
     ]
   }
   statement {
