@@ -21,7 +21,7 @@ from itr_api import codes
 from itr_api.cookie import LIFETIME_S, set_cookie, sign
 from itr_api.errors import NO_STORE, ApiError
 from itr_api.games import GameStore, NewGame, Refused, seconds_to_kyiv_midnight
-from itr_api.labs import Labs
+from itr_api.labs import Labs, lab_view
 from itr_api.launcher import Launcher, LaunchError, ServerSpec
 from itr_api.score import score
 
@@ -334,3 +334,92 @@ def game_status(
         body["end_reason"] = meta["end_reason"]
     response.headers.update(NO_STORE)
     return body
+
+
+# ----- results and feedback ----------------------------------------------------------------
+def timeline(events: list[dict]) -> list[dict]:
+    """The player's timeline: only events with a game time (contract 3), in game order.
+    The game has ended, so the hidden fields (tone, risky, checks_passing) may be shown now."""
+    timed = [e for e in events if e.get("t") is not None]
+    timed.sort(
+        key=lambda e: (
+            e["t"],
+            str(e.get("at", "")),
+            str(e.get("by", "")),
+            int(e.get("seq") or 0),
+        )
+    )
+    return [
+        {"t": e["t"], "type": e["type"], "data": e.get("data") or {}} for e in timed
+    ]
+
+
+def next_lab(deps: Deps, card) -> str | None:
+    course = (card.course or {}).get("id") if card else None
+    labs = deps.labs.course(str(course)) if course else None
+    if not labs or card.id not in labs:
+        return None
+    index = labs.index(card.id)
+    return labs[index + 1] if index + 1 < len(labs) else None
+
+
+@router.get("/results/{game_id}")
+def results(
+    game_id: str, response: Response, deps: DepsArg, x_invite_code: InviteCode = None
+) -> dict:
+    """Everything for the results page, including the debrief: only after the game was scored."""
+    meta = game_of(deps, game_id, x_invite_code)
+    if meta.get("state") != "ended":
+        raise ApiError("not_ended", NOT_ENDED_RETRY_S)
+    result = deps.store.result(game_id)
+    if result is None:
+        raise ApiError("not_scored_yet", NOT_ENDED_RETRY_S)
+    if not result.get("scored"):
+        # A failed start or a game that ended before the page: no debrief, or it would
+        # hand out the answer without playing (a failed start isn't even counted).
+        raise ApiError("not_scored")
+    lab_id, version = str(meta["lab_id"]), int(meta["lab_version"])
+    card = deps.labs.card_at(lab_id, version)
+    debrief = deps.labs.debrief(lab_id, version)
+    if card is None or debrief is None:
+        log(
+            "results_missing_lab_files", game_id=game_id, lab_id=lab_id, version=version
+        )
+        raise ApiError("internal")
+    response.headers.update(NO_STORE)
+    return {
+        "game_id": game_id,
+        "lab": lab_view(card),
+        "nickname": meta.get("nickname", ""),
+        "end_reason": meta.get("end_reason"),
+        "score": result,
+        "events": timeline(deps.store.events(game_id)),
+        "debrief": debrief,
+        "next_lab_id": next_lab(deps, card),
+        "feedback_given": deps.store.feedback_given(game_id),
+    }
+
+
+class FeedbackBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replay: int = Field(ge=1, le=5)
+    stuck: str | None = Field(default=None, max_length=1000)
+    fake: str | None = Field(default=None, max_length=1000)
+
+
+@router.put("/sessions/{game_id}/feedback", status_code=204)
+def feedback(
+    game_id: str, body: FeedbackBody, deps: DepsArg, x_invite_code: InviteCode = None
+) -> Response:
+    """Save (or replace) the 3-question feedback for an ended game."""
+    meta = game_of(deps, game_id, x_invite_code)
+    if meta.get("state") != "ended":
+        raise ApiError("not_ended", NOT_ENDED_RETRY_S)
+    answers = {"replay": body.replay}
+    for name in ("stuck", "fake"):
+        text = (getattr(body, name) or "").strip()
+        if text:
+            answers[name] = text
+    deps.store.save_feedback(game_id, answers)
+    log("feedback", game_id=game_id, replay=body.replay)
+    return Response(status_code=204, headers=NO_STORE)

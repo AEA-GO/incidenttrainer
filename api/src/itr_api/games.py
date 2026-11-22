@@ -484,3 +484,19 @@ class GameStore:
                 },
             )
         return result
+
+    # ----- feedback (contract 3) ------------------------------------------------------
+    def feedback_given(self, game_id: str) -> bool:
+        return self._get(f"GAME#{game_id}", "FEEDBACK") is not None
+
+    def save_feedback(self, game_id: str, feedback: dict) -> None:
+        now = self.clock()
+        self.table.put_item(
+            Item={
+                "pk": f"GAME#{game_id}",
+                "sk": "FEEDBACK",
+                **feedback,
+                "at": iso_ms(now),
+                "expires_at": int(now) + GAME_TTL_S,
+            }
+        )

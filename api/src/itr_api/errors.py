@@ -23,6 +23,7 @@ KNOWN = {
     ),
     "not_ended": (409, "The game hasn't ended yet."),
     "not_scored_yet": (409, "The game hasn't been scored yet."),
+    "not_scored": (409, "This game couldn't be scored, so there are no results."),
     "internal": (500, "Something went wrong on our side."),
 }
 
