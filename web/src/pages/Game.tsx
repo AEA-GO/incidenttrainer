@@ -110,6 +110,26 @@ function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => void }) 
     game.scene(gameId).then((scene) => setDashboard(scene.dashboards[0]?.path ?? "")).catch(() => undefined);
   }, [gameId]);
 
+  // Grafana starts a little after the agent: show the dashboards only once it answers.
+  const [grafanaUp, setGrafanaUp] = useState(false);
+  useEffect(() => {
+    if (grafanaUp) return;
+    let live = true;
+    let timer: number | undefined;
+    const check = async () => {
+      if (await game.grafanaReady(gameId)) {
+        if (live) setGrafanaUp(true);
+        return;
+      }
+      if (live) timer = window.setTimeout(check, 3000);
+    };
+    check();
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [gameId, grafanaUp]);
+
   useEffect(() => {
     let live = true;
     let timer: number | undefined;
@@ -173,6 +193,11 @@ function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => void }) 
           {paged && !s.page.acknowledged && (
             <Button className="w-full" disabled={busy} onClick={() => act(() => game.ack(gameId))}>Acknowledge</Button>
           )}
+          {paged && s.page.acknowledged && (
+            <p className="font-mono text-xs text-good">
+              ● Acknowledged{typeof s.page.acknowledged_t === "number" ? ` at ${clock(s.page.acknowledged_t)}` : ""}
+            </p>
+          )}
           <section>
             <Eyebrow>Customer impact</Eyebrow>
             <p className="mt-1 font-mono text-3xl">{s.health.value}%</p>
@@ -205,10 +230,10 @@ function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => void }) 
           </section>
         </aside>
         <section className="min-h-[70vh] overflow-hidden rounded border border-line">
-          {dashboard ? (
+          {dashboard && grafanaUp ? (
             <iframe title="Dashboards" src={`/s/${gameId}/${dashboard}`} className="h-full min-h-[70vh] w-full" />
           ) : (
-            <p className="p-6 font-mono text-sm text-faint">Loading dashboards…</p>
+            <p className="p-6 font-mono text-sm text-faint">Dashboards are starting…</p>
           )}
         </section>
       </main>

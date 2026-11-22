@@ -62,8 +62,8 @@ export function Lab() {
               </ul>
             )}
             {lab.done && (
-              <p className="mt-6 font-mono text-sm text-good">
-                ● Your best: {lab.done.score} · {lab.done.grade}{" "}
+              <p className="mt-6 font-mono text-sm text-muted">
+                Your best: {lab.done.score} · {lab.done.grade}{" "}
                 <Link to={`/results/${lab.done.game_id}`} className="text-muted underline">results</Link>
               </p>
             )}
