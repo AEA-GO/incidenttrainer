@@ -5,7 +5,8 @@ feed and runbook. Rules (docs/contracts/game-states.md and events.md):
 
 - Resolve works only while investigating (after Acknowledge, not during a watch).
   Failed: the failing checks are named in plain words; -2 points until -6.
-  Passed: the watch starts.
+  Passed: the watch starts, or, in a lab whose watch is 0 seconds, the game ends
+  `resolved` at once.
 - The watch re-runs the checks every interval. Any failure reopens the incident
   at SEV1. If they keep passing for the whole watch, the game ends `resolved`.
 - Other endings: give up, the time limit (40 min), abandoned (from the gateway).
@@ -64,7 +65,11 @@ class OutcomeMixin:
             failing = [r for r in results if not r.passed]
             if failing:
                 return self._resolve_failed(failing, t)
-            return self._start_watch(t)
+            result = self._start_watch(t)
+        if result["watch_seconds"] == 0:
+            # This lab has no watch (decided 22 Nov for lab 1): resolved right away.
+            self.finish("resolved")
+        return result
 
     def _why_no_resolve(self) -> str:
         return {
@@ -111,12 +116,13 @@ class OutcomeMixin:
             {"attempt": self.resolve_attempts, "watch_seconds": seconds},
             t=t,
         )
-        self.feed.add(
-            "notice",
-            t,
-            level="info",
-            text=f"Checks pass. Watching for {clock_text(seconds)} to make sure the fix holds.",
-        )
+        if seconds:
+            self.feed.add(
+                "notice",
+                t,
+                level="info",
+                text=f"Checks pass. Watching for {clock_text(seconds)} to make sure the fix holds.",
+            )
         self.chat.trigger("resolve_passed", t)
         log.info("resolve passed; watching for %s s", seconds)
         return {

@@ -141,7 +141,8 @@ checks:
       message: "Orders placed before the incident were lost."
 ```
 - `message` is what the player sees when the check fails. It must describe a **symptom**, never the fix. Placeholders: `{value}`, `{threshold}`.
-- Success checks should be symptoms (what customers feel). If a lab adds a cause check, its message must stay vague ("The cause is still active."). Symptom-only fixes are caught by the watch.
+- Success checks should be symptoms (what customers feel). If a lab adds a cause check, its message must stay vague ("The cause is still active."). Symptom-only fixes are caught by the watch, or, in a lab without a watch, by that cause check at Resolve.
+- `watch.seconds: 0` means **no watch**: the game ends `resolved` as soon as Resolve passes (decided 22 Nov for lab 1, where the fault can't come back by itself once the cause check passes). Use a watch (30–600 s) for faults that return on their own: leaks, a job re-applying a bad setting, rare intermittent failures, half fixes.
 
 ### `hints`
 

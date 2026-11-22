@@ -349,3 +349,39 @@ def test_ninety_plus_with_a_hint_is_a():
 def test_weights_by_level(level, maxima):
     result = score({"level": level, "target_time_s": 300}, GOOD)
     assert tuple(c["max"] for c in result["categories"].values()) == maxima
+
+
+def test_empty_fields_reason_names_the_missing_field():
+    events = base(
+        ev(
+            0,
+            60,
+            "status_update",
+            {
+                "affected": "all",
+                "doing": "x",
+                "next_update_t": None,
+                "page_state": "investigating",
+                "fields_filled": 3,
+                "checks_passing": False,
+            },
+        ),
+        ev(
+            0,
+            200,
+            "status_update",
+            {
+                "affected": "",
+                "doing": "y",
+                "next_update_t": None,
+                "page_state": "identified",
+                "fields_filled": 2,
+                "checks_passing": False,
+            },
+        ),
+    )
+    line = next(x for x in score(SCORING, events)["lost"] if x["rule"] == "comm.fields")
+    assert (
+        line["reason"]
+        == "Missing in status updates: who is affected (1 of 2), next update time (2 of 2)."
+    )

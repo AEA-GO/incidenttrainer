@@ -295,3 +295,31 @@ def test_runbook_with_broken_checks_is_refused(control, push, change, expected):
     response = control.put("/control/v1/runbook", json=bad, headers=AUTH)
     assert response.status_code == 422
     assert expected in response.json()["error"]["message"]
+
+
+def test_lab_without_a_watch_ends_resolved_at_resolve(
+    control, push, agent, prometheus, player
+):
+    """watch.seconds 0 (lab 1 since 22 Nov): Resolve passing ends the game at once."""
+    no_watch = copy.deepcopy(push)
+    no_watch["runbook"]["checks"]["watch"]["seconds"] = 0
+    assert control.post("/control/v1/claim", json=CLAIM).status_code == 204
+    assert (
+        control.put("/control/v1/runbook", json=no_watch, headers=AUTH).status_code
+        == 202
+    )
+    prometheus.error_rates = BROKEN
+    prometheus.fire("CheckoutErrorRateHigh", 31.0)
+    agent.tick()
+    assert player.post("/v1/ack", headers=PLAYER).status_code == 200
+    prometheus.error_rates = FIXED
+
+    body = resolve(player).json()
+    assert body["result"] == "passed" and body["watch_seconds"] == 0
+    state = player.get("/v1/state", headers=PLAYER).json()
+    assert state["state"] == "ended" and state["end_reason"] == "resolved"
+    happened = types(control)
+    assert happened.index("resolve_passed") < happened.index("ended")
+    assert "watch_passed" not in happened and "reopened" not in happened
+    notices = [i["text"] for i in state["feed"]["items"] if i["kind"] == "notice"]
+    assert not any("Watching for" in text for text in notices)

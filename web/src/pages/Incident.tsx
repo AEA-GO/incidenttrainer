@@ -142,7 +142,9 @@ export function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => v
             act(() => game.resolve(gameId), (r) => {
               const reply = r as { result: string; failing?: { message: string }[]; watch_seconds?: number };
               return reply.result === "passed"
-                ? `Resolve passed. Watching for ${reply.watch_seconds ?? 0} s: keep it stable.`
+                ? reply.watch_seconds
+                  ? `Resolve passed. Watching for ${reply.watch_seconds} s: keep it stable.`
+                  : "Resolved. Scoring your shift…"
                 : `Not resolved yet: ${(reply.failing ?? []).map((f) => f.message).join(" ")}`;
             })
           }>
@@ -406,6 +408,13 @@ function FeedLine({ item, answered, onReply }: {
   return <p className={`text-xs ${item.level === "error" ? "text-bad" : item.level === "warning" ? "text-warn" : "text-faint"}`}>{at} {item.text}</p>;
 }
 
+// In-world clock arithmetic for promises: "03:22" + 10 → "03:32" (wraps at midnight).
+export function addMinutes(hhmm: string, minutes: number): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const total = (h * 60 + m + minutes) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function StatusForm({ gameId, s, disabled }: { gameId: string; s: AgentState; disabled: boolean }) {
   const [affected, setAffected] = useState("");
   const [doing, setDoing] = useState("");
@@ -442,11 +451,21 @@ function StatusForm({ gameId, s, disabled }: { gameId: string; s: AgentState; di
         className="block w-full rounded border border-line bg-panel px-2 py-1.5 text-sm placeholder:text-faint" />
       <input placeholder="What we're doing" value={doing} onChange={(e) => setDoing(e.target.value)} maxLength={500}
         className="block w-full rounded border border-line bg-panel px-2 py-1.5 text-sm placeholder:text-faint" />
-      <label className="flex items-center justify-between gap-2 text-muted">
-        Next update at (in-world)
-        <input type="time" value={next} onChange={(e) => setNext(e.target.value)}
-          className="rounded border border-line bg-panel px-2 py-1 font-mono text-sm text-text" />
-      </label>
+      <div className="flex items-center justify-between gap-2 text-muted">
+        <span>Next update (in-world)</span>
+        <span className="flex gap-1">
+          {[5, 10, 15].map((minutes) => {
+            const at = s.clock.scene_time ? addMinutes(s.clock.scene_time, minutes) : "";
+            return (
+              <button type="button" key={minutes} disabled={!at} onClick={() => setNext(at)}
+                className={`rounded border px-2 py-1 font-mono ${next && next === at ? "border-accent text-accent" : "border-line text-muted"}`}>
+                +{minutes}m
+              </button>
+            );
+          })}
+          <span className="w-14 py-1 text-right font-mono text-text">{next || "--:--"}</span>
+        </span>
+      </div>
       <div className="grid grid-cols-4 gap-1">
         {PAGE_STATES.map((p) => (
           <button type="button" key={p} onClick={() => setPageState(p)} aria-pressed={pageState === p}
