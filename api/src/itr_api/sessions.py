@@ -435,3 +435,69 @@ def feedback(
     deps.store.save_feedback(game_id, answers)
     log("feedback", game_id=game_id, replay=body.replay)
     return Response(status_code=204, headers=NO_STORE)
+
+
+# ----- the course and lab cards (public; a valid code adds "done" and the invite) ---------
+COURSE_ID = os.environ.get("ITR_COURSE", "on-call-basics")
+
+
+def optional_code(deps: Deps, header: str | None) -> str | None:
+    """A valid, active code or None: these endpoints work without one (contract 3)."""
+    code = codes.normalise(header)
+    item = deps.store.code(code) if code else None
+    return code if item and item.get("active") else None
+
+
+def best_games(deps: Deps, code: str | None) -> dict[str, dict]:
+    best: dict[str, dict] = {}
+    for game in deps.store.code_games(code) if code else []:
+        if game.get("score") is None:
+            continue
+        lab, score = str(game.get("lab_id")), int(game["score"])
+        if lab not in best or score > best[lab]["score"]:
+            best[lab] = {
+                "game_id": game.get("game_id"),
+                "score": score,
+                "grade": game.get("grade"),
+            }
+    return best
+
+
+def card_with_done(card, code: str | None, best: dict[str, dict]) -> dict:
+    view = lab_view(card)
+    if code:
+        view["done"] = best.get(card.id)
+    return view
+
+
+@router.get("/course")
+def course(response: Response, deps: DepsArg, x_invite_code: InviteCode = None) -> dict:
+    info = deps.labs.course_info(COURSE_ID)
+    if info is None:
+        log("course_missing", course_id=COURSE_ID)
+        raise ApiError("not_found")
+    code = optional_code(deps, x_invite_code)
+    best = best_games(deps, code)
+    cards = [deps.labs.card(lab_id) for lab_id in info["labs"]]
+    body = {
+        "id": info["id"],
+        "title": info["title"],
+        "summary": info["summary"],
+        "labs": [card_with_done(c, code, best) for c in cards if c is not None],
+    }
+    if code:
+        body["invite"] = invite_view(deps, code, deps.store.code(code) or {})
+    response.headers.update(NO_STORE)
+    return body
+
+
+@router.get("/labs/{lab_id}")
+def lab(
+    lab_id: str, response: Response, deps: DepsArg, x_invite_code: InviteCode = None
+) -> dict:
+    card = deps.labs.card(lab_id)
+    if card is None:
+        raise ApiError("not_found")
+    code = optional_code(deps, x_invite_code)
+    response.headers.update(NO_STORE)
+    return card_with_done(card, code, best_games(deps, code))

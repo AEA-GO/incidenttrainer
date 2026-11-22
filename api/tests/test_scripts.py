@@ -74,3 +74,19 @@ def test_invite_codes_add_list_off():
         assert script.switch_off(tbl, made[0].lower()) == codes.shown(made[0])
         rows = script.listing(tbl)
         assert len(rows) == 2 and any(" off " in r and "tester" in r for r in rows)
+
+
+def test_course_file():
+    script = load("publish_course")
+    assert script.build_course(
+        "on-call-basics", "On-call basics", "", ["a-lab", "b-lab"]
+    ) == {
+        "id": "on-call-basics",
+        "title": "On-call basics",
+        "summary": "",
+        "labs": ["a-lab", "b-lab"],
+    }
+    with pytest.raises(ValueError):
+        script.build_course("on-call-basics", "x", "", ["a-lab", "a-lab"])
+    with pytest.raises(ValueError):
+        script.build_course("../x", "x", "", ["a-lab"])

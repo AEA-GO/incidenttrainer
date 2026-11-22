@@ -715,3 +715,57 @@ def test_s3_labs_reads_a_version_debrief_and_course():
         assert labs.debrief("example-lab", 2) is None
         assert labs.course("example-course") == ["example-lab"]
         assert labs.course("nope") is None
+
+
+# ----- course and lab cards ----------------------------------------------------------------
+@pytest.fixture
+def course_env(env, monkeypatch):
+    monkeypatch.setattr(sessions, "COURSE_ID", "example-course")
+    return env
+
+
+def test_course_without_a_code_is_public_cards_only(course_env):
+    _, _, client = course_env
+    body = client.get("/api/course").json()
+    assert body["id"] == "example-course" and body["title"] == "example-course"
+    assert [lab["id"] for lab in body["labs"]] == [
+        "example-lab"
+    ]  # unpublished lab skipped
+    assert "done" not in body["labs"][0] and "invite" not in body
+    assert "scoring" not in body["labs"][0] and "world" not in body["labs"][0]
+
+
+def test_course_with_a_code_shows_done_and_invite(course_env):
+    table, _, client = course_env
+    headers = {"X-Invite-Code": CODE}
+    body = client.get("/api/course", headers=headers).json()
+    assert body["labs"][0]["done"] is None
+    assert body["invite"] == {"games_total": 6, "games_left": 6, "games_left_today": 3}
+    game_id = finished_good_game(table, client)
+    body = client.get("/api/course", headers=headers).json()
+    assert body["labs"][0]["done"] == {"game_id": game_id, "score": 98, "grade": "S"}
+    assert body["invite"]["games_left"] == 5
+    assert (
+        client.get("/api/course", headers={"X-Invite-Code": "AAAA-AAAA"})
+        .json()
+        .get("invite")
+        is None
+    )
+
+
+def test_course_missing_is_not_found(env):
+    _, _, client = env
+    assert (
+        client.get("/api/course").status_code == 404
+    )  # no on-call-basics in the test labs
+
+
+def test_one_lab_card(course_env):
+    _, _, client = course_env
+    reply = client.get("/api/labs/example-lab", headers={"X-Invite-Code": CODE})
+    assert reply.status_code == 200
+    assert (
+        reply.json()["title"] == "Tuesday afternoon errors"
+        and reply.json()["done"] is None
+    )
+    assert client.get("/api/labs/no-such-lab").status_code == 404
