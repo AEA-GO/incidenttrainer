@@ -172,8 +172,10 @@ class Checker:
         return free >= p["min_percent"], free, p["min_percent"]
 
     def _config_equals(self, p: dict) -> tuple[bool, object, object]:
+        """`value` is one value, or a list of acceptable ones (e.g. any log level but debug)."""
         value = env_value(self.world.config_file(p["service"]), p["key"])
-        return value == p["value"], value, p["value"]
+        wanted = p["value"] if isinstance(p["value"], list) else [p["value"]]
+        return value in wanted, value, " or ".join(wanted)
 
     def _containers(self, service: str) -> list[dict]:
         argv = ["docker", "compose", "-p", self.world.project]
