@@ -95,8 +95,10 @@ export function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => v
   const acked = s.page.acknowledged;
   const hintsLeft = s.hints.total - s.hints.used;
 
+  // translate="no": a browser translating this screen rewrites text React updates 4 times a
+  // second, which can blank the page. The rest of the site can still be translated.
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col" translate="no">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-5 py-3">
         <span className="font-display text-sm font-black">IncidentTrainer</span>
         {paged ? (

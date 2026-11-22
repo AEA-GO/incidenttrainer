@@ -50,7 +50,7 @@ export function Lab() {
         <Link to="/labs" className="text-sm text-muted underline">← All labs</Link>
         {lab && (
           <>
-            <Eyebrow>Lab {String(lab.order).padStart(2, "0")}</Eyebrow>
+            <div className="mt-8"><Eyebrow>Lab {String(lab.order).padStart(2, "0")}</Eyebrow></div>
             <h1 className="mt-2 font-display text-4xl font-black">{lab.title}</h1>
             <p className="mt-3 text-lg text-muted">{lab.hook}</p>
             <div className="mt-3"><LevelTag level={lab.level} minutes={lab.minutes} /></div>

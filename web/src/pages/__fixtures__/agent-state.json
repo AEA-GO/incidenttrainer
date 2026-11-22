@@ -1,0 +1,159 @@
+{
+ "game_id": "q3V9xYk2Lm8Ta1BcD4eF0g",
+ "state": "investigating",
+ "end_reason": null,
+ "severity": "SEV2",
+ "reopened": false,
+ "clock": {
+  "t": 120,
+  "time_left_s": 2280,
+  "scene_time": "14:22"
+ },
+ "page": {
+  "fired": true,
+  "title": "Checkout error rate 31%",
+  "acknowledged": true,
+  "acknowledged_t": 0
+ },
+ "health": {
+  "value": 100,
+  "failed_checkouts": 0
+ },
+ "services": [
+  {
+   "name": "storefront",
+   "status": "degraded",
+   "label": "ERRORS",
+   "detail": "errors 31%"
+  },
+  {
+   "name": "catalog",
+   "status": "degraded",
+   "label": "ERRORS",
+   "detail": "errors 30%"
+  }
+ ],
+ "alerts": [
+  {
+   "name": "CheckoutErrorRateHigh",
+   "state": "firing",
+   "summary": "CheckoutErrorRateHigh summary"
+  }
+ ],
+ "changes": [
+  {
+   "t": null,
+   "ago_s": 1500,
+   "service": "catalog",
+   "text": "feature flag SEARCH_V2 turned on",
+   "by": "dana"
+  },
+  {
+   "t": null,
+   "ago_s": 86400,
+   "service": "storefront",
+   "text": "timeout 3s -> 2s",
+   "by": "ci"
+  }
+ ],
+ "resolve": {
+  "attempts": 1,
+  "wrong": 1,
+  "watch_ends_in_s": null
+ },
+ "hints": {
+  "used": 1,
+  "total": 2,
+  "next_available_in_s": 180
+ },
+ "status_page": {
+  "state": "identified",
+  "last_update_t": 30,
+  "next_update_at": null
+ },
+ "feed": {
+  "cursor": 6,
+  "items": [
+   {
+    "id": 1,
+    "kind": "status_update",
+    "t": 30,
+    "status_update": {
+     "affected": "a",
+     "doing": "b",
+     "next_update_at": null,
+     "page_state": "identified"
+    }
+   },
+   {
+    "id": 2,
+    "kind": "hint",
+    "t": 30,
+    "n": 1,
+    "text": "Which service started failing first?"
+   },
+   {
+    "id": 3,
+    "kind": "action_result",
+    "t": 30,
+    "result": {
+     "action_id": "show-catalog-config",
+     "label": "Show config",
+     "command": "cat config/catalog.env",
+     "exit_code": 0,
+     "output": "SERVICE_NAME=catalog\nSEARCH_V2=true\n",
+     "truncated": false,
+     "duration_ms": 0,
+     "t": 30
+    }
+   },
+   {
+    "id": 4,
+    "kind": "chat_message",
+    "t": 60,
+    "message_id": "dana-1",
+    "from": "dana",
+    "text": "Saw the page. Any ETA? Marketing email goes out at 15:00.",
+    "replies": [
+     {
+      "id": "a",
+      "text": "No ETA yet. I'll update you by 14:35."
+     },
+     {
+      "id": "b",
+      "text": "Should be fixed in 5 minutes."
+     }
+    ]
+   },
+   {
+    "id": 5,
+    "kind": "chat_message",
+    "t": 60,
+    "message_id": "sam-1",
+    "from": "sam",
+    "text": "Getting tickets: 'payment failed' at checkout. How bad is it?",
+    "replies": [
+     {
+      "id": "a",
+      "text": "Investigating, about a third of checkouts fail. Next update by 14:35."
+     },
+     {
+      "id": "b",
+      "text": "Should be fixed in 5 minutes."
+     },
+     {
+      "id": "c",
+      "text": "Not sure yet, looking into it."
+     }
+    ]
+   },
+   {
+    "id": 6,
+    "kind": "notice",
+    "t": 60,
+    "level": "error",
+    "text": "Not resolved yet: Checkout error rate is 31% over the last minute (needs under 1%)."
+   }
+  ]
+ }
+}
