@@ -28,6 +28,7 @@ from itr_agent.checks import Checker, http_status
 from itr_agent.errors import AgentError
 from itr_agent.events import EventLog
 from itr_agent.feed import Feed
+from itr_agent.grafana import GrafanaForGame
 from itr_agent.observe import Observation, ServiceStatus, observe
 from itr_agent.outcome import OutcomeMixin
 from itr_agent.prometheus import Alert, PrometheusLike
@@ -50,6 +51,11 @@ class Agent(OutcomeMixin):
     prometheus: PrometheusLike
     clock: Callable[[], float] = time.monotonic
     http: Callable[[str, str], int | None] = http_status
+    # Grafana is pointed at the game's address after claim, in a thread (grafana.py);
+    # tests run it inline.
+    grafana_per_game: bool = True
+    grafana_in_background: bool = True
+    sleep: Callable[[float], None] = time.sleep
     # Always True for now. A later step replaces this with real checks
     # (Compose up, Prometheus answering).
     booted: bool = True
@@ -143,6 +149,24 @@ class Agent(OutcomeMixin):
             self.game_id = game_id
             self.public_base_url = public_base_url
             self._token = token
+        if self.grafana_per_game:
+            self._start_grafana(public_base_url, game_id)
+
+    def _start_grafana(self, public_base_url: str, game_id: str) -> None:
+        def report(status: str) -> None:
+            with self._lock:
+                self.components = {**self.components, "grafana": status}
+
+        grafana = GrafanaForGame(self.world, self.runner, self.http, self.sleep, report)
+        if self.grafana_in_background:
+            threading.Thread(
+                target=grafana.start,
+                args=(public_base_url, game_id),
+                name="grafana",
+                daemon=True,
+            ).start()
+        else:
+            grafana.start(public_base_url, game_id)
 
     def require_claimed(self) -> None:
         if not self.claimed:

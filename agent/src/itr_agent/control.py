@@ -67,8 +67,8 @@ def build_control_app(agent: Agent) -> FastAPI:
 
     @app.post("/control/v1/claim", status_code=204)
     def claim(body: ClaimRequest) -> Response:
-        # A later step adds: start Grafana with
-        # root_url <public_base_url>/s/<game_id>/grafana/ and wait for it.
+        # Also points Grafana at <public_base_url>/s/<game_id>/grafana/, in the
+        # background (grafana.py): the claim answers at once.
         agent.claim(body.game_id, body.token, body.public_base_url)
         return Response(status_code=204)
 

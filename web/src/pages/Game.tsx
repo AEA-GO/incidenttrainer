@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import { Button, Eyebrow, Notice, Page } from "../components/Layout";
 import { ApiError, type GameStatus, type LabCard, api, clock } from "../lib/api";
 import { type AgentState, type Service, game } from "../lib/game";
+import { useTicking } from "../lib/useTicking";
 
 const POLL_MS = 2000;
 
@@ -59,7 +60,7 @@ export function Game() {
 }
 
 function Boot({ status, lab }: { status: GameStatus | null; lab: LabCard | null }) {
-  const seconds = status?.boot.seconds_since_start ?? 0;
+  const seconds = useTicking(status?.boot.seconds_since_start ?? null) ?? 0;
   const steps: [string, boolean][] = [
     ["Server started", Boolean(status?.boot.server_started)],
     ["Shop, monitoring and the agent starting", Boolean(status?.boot.agent_ready)],
@@ -84,7 +85,7 @@ function Boot({ status, lab }: { status: GameStatus | null; lab: LabCard | null 
               </li>
             ))}
           </ul>
-          <p className="mt-6 font-mono text-3xl">{clock(seconds)}</p>
+          <p className="mt-6 font-mono text-3xl tabular-nums">{clock(seconds)}</p>
           <p className="mt-1 text-xs text-faint">Usually about two minutes. The page comes soon after.</p>
         </div>
       </div>
@@ -171,6 +172,10 @@ function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => void }) 
     }
   }
 
+  const clockRuns = s !== null && s.state !== "ended";
+  const t = useTicking(s?.clock.t ?? null, 1, clockRuns);
+  const left = useTicking(s?.clock.time_left_s ?? null, -1, clockRuns);
+
   if (!s) return <Page><p className="py-24 font-mono text-sm text-muted">Connecting to your server…</p></Page>;
   const paged = s.page.fired;
   return (
@@ -185,8 +190,8 @@ function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => void }) 
         ) : (
           <span className="font-mono text-sm text-muted">Quiet so far… the page can come any second.</span>
         )}
-        <span className="ml-auto font-mono text-2xl">{s.clock.t === null ? "--:--" : clock(s.clock.t)}</span>
-        {s.clock.time_left_s !== null && <span className="font-mono text-xs text-faint">{clock(s.clock.time_left_s)} left</span>}
+        <span className="ml-auto font-mono text-2xl tabular-nums">{t === null ? "--:--" : clock(t)}</span>
+        {left !== null && <span className="font-mono text-xs text-faint tabular-nums">{clock(left)} left</span>}
       </header>
       <main className="grid gap-6 p-6 lg:grid-cols-[18rem_1fr]">
         <aside className="space-y-6">

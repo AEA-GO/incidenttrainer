@@ -45,6 +45,7 @@ class World:
     metrics: dict[str, str]
     dashboards: tuple[dict[str, str], ...]
     status: StatusRules
+    grafana_port: int = 3000
 
     def config_file(self, service: str) -> Path:
         """The env file a service reads its settings and flags from."""
@@ -88,6 +89,7 @@ def load_world(path: Path, compose_dir_override: Path | None = None) -> World:
         services=services,
         metrics=dict(data["metrics"]),
         dashboards=tuple(data["grafana"]["dashboards"]),
+        grafana_port=int(data["grafana"].get("port", 3000)),
         status=StatusRules(
             degraded_error_percent=status["degraded_error_percent"],
             down_error_percent=status["down_error_percent"],
