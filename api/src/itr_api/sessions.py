@@ -268,24 +268,12 @@ def finish(
     return finish_game(deps, game_id, meta)
 
 
-def finish_game(deps: Deps, game_id: str, meta: dict) -> dict:
+def finish_game(
+    deps: Deps, game_id: str, meta: dict, by: str = "api", reason: str = "finished"
+) -> dict:
     if meta.get("state") != "ended":
         raise ApiError("not_ended", NOT_ENDED_RETRY_S)
-    if meta.get("instance_id") and not meta.get("server_terminated_at"):
-        deps.launcher.stop(
-            str(meta["instance_id"])
-        )  # never touches a server without our game tag
-        if deps.store.mark_terminated(game_id):
-            created = datetime.fromisoformat(str(meta.get("created_at"))).timestamp()
-            deps.store.event(
-                game_id,
-                "server_terminated",
-                {
-                    "reason": "finished",
-                    "lifetime_s": max(int(deps.clock() - created), 0),
-                },
-            )
-            log("server_terminated", game_id=game_id, server_id=meta["instance_id"])
+    delete_server(deps, game_id, meta, by, reason)
     done = deps.store.result(game_id)
     if done is not None:
         return done
@@ -302,6 +290,30 @@ def finish_game(deps: Deps, game_id: str, meta: dict) -> dict:
         grade=saved.get("grade"),
     )
     return saved
+
+
+def delete_server(deps: Deps, game_id: str, meta: dict, by: str, reason: str) -> None:
+    """Delete the game's server (once) and note it: the gateway then answers 410."""
+    if not meta.get("instance_id") or meta.get("server_terminated_at"):
+        return
+    deps.launcher.stop(
+        str(meta["instance_id"])
+    )  # never touches a server without our tag
+    if deps.store.mark_terminated(game_id):
+        created = datetime.fromisoformat(str(meta.get("created_at"))).timestamp()
+        deps.store.event(
+            game_id,
+            "server_terminated",
+            {"reason": reason, "lifetime_s": max(int(deps.clock() - created), 0)},
+            by=by,
+        )
+        log(
+            "server_terminated",
+            game_id=game_id,
+            server_id=meta["instance_id"],
+            by=by,
+            reason=reason,
+        )
 
 
 @router.get("/sessions/{game_id}")

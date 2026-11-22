@@ -237,6 +237,7 @@ resource "aws_lambda_function" "api" {
       ITR_SANDBOX_SUBNETS = join(",", var.sandbox_subnet_ids) # zone a first
       ITR_TEMPLATE_PREFIX = "${var.name}-"
       ITR_LABS_BUCKET     = var.labs_bucket
+      ITR_ALERTS_TOPIC    = local.alerts_topic_arn
     }
   }
 

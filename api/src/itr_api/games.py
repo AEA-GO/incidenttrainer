@@ -37,6 +37,7 @@ API_SEQ = {
     "boot_failed": 4,
     "ended": 5,
 }
+CLEANUP_SEQ = {"server_terminated": 1, "boot_failed": 2, "ended": 3}
 
 
 def iso_ms(seconds: float) -> str:
@@ -298,9 +299,23 @@ class GameStore:
         )
         return expires
 
-    # ----- a start that failed: end the game `failed` and give everything back -----------
+    # ----- ending a game from outside the agent ------------------------------------------
     def fail(self, game: NewGame, reason: str) -> bool:
-        """META ended/failed exactly once; the winner gives back code, day, slot and month."""
+        """A start that failed: end the game `failed` and give everything back."""
+        return self.end_game(game.game_id, game.code, game.created_at, "failed", reason)
+
+    def end_game(
+        self,
+        game_id: str,
+        code: str,
+        created_at: str,
+        end_reason: str,
+        detail: str = "",
+    ) -> bool:
+        """META ended exactly once (if someone else ended it first: False, nothing changes).
+
+        `failed` gives back the code's game, the day, the slot and the month; any other end
+        (cleanup's `abandoned`) frees only the slot: the game counted."""
         from botocore.exceptions import ClientError
 
         name, at = self.table.name, iso_ms(self.clock())
@@ -310,34 +325,38 @@ class GameStore:
                     {
                         "Update": {
                             "TableName": name,
-                            "Key": {"pk": f"GAME#{game.game_id}", "sk": "META"},
-                            "UpdateExpression": "SET #state = :ended, end_reason = :failed,"
-                            " ended_at = :at, failure = :reason",
+                            "Key": {"pk": f"GAME#{game_id}", "sk": "META"},
+                            "UpdateExpression": "SET #state = :ended, end_reason = :reason,"
+                            " ended_at = :at, ended_by = :by, failure = :detail",
                             "ConditionExpression": "attribute_exists(pk) AND #state <> :ended",
                             "ExpressionAttributeNames": {"#state": "state"},
                             "ExpressionAttributeValues": {
                                 ":ended": "ended",
-                                ":failed": "failed",
+                                ":reason": end_reason,
                                 ":at": at,
-                                ":reason": reason[:300],
+                                ":by": "api" if end_reason == "failed" else "cleanup",
+                                ":detail": detail[:300],
                             },
                         }
                     },
                     {
                         "Delete": {
                             "TableName": name,
-                            "Key": {"pk": "ACTIVE", "sk": f"GAME#{game.game_id}"},
+                            "Key": {"pk": "ACTIVE", "sk": f"GAME#{game_id}"},
                         }
                     },
                     {
                         "Update": {
                             "TableName": name,
-                            "Key": {"pk": f"CODE#{game.code}", "sk": game.code_game_sk},
-                            "UpdateExpression": "SET #state = :ended, end_reason = :failed",
+                            "Key": {
+                                "pk": f"CODE#{code}",
+                                "sk": f"GAME#{created_at}#{game_id}",
+                            },
+                            "UpdateExpression": "SET #state = :ended, end_reason = :reason",
                             "ExpressionAttributeNames": {"#state": "state"},
                             "ExpressionAttributeValues": {
                                 ":ended": "ended",
-                                ":failed": "failed",
+                                ":reason": end_reason,
                             },
                         }
                     },
@@ -350,41 +369,84 @@ class GameStore:
             if reasons[:1] == ["ConditionalCheckFailed"]:
                 return False  # someone else ended it first
             raise
-        # Give back one by one: a counter that cleanup already reset must not go below 0.
-        for pk, sk, field in (
-            (f"CODE#{game.code}", "META", "games_used"),
-            (f"CODE#{game.code}", f"DAY#{kyiv_day(game.now)}", "count"),
-            ("COUNTER", "RUNNING", "count"),
-            ("COUNTER", f"MONTH#{month(game.now)}", "games"),
-        ):
-            try:
-                self.table.update_item(
-                    Key={"pk": pk, "sk": sk},
-                    UpdateExpression="ADD #f :minus",
-                    ConditionExpression="#f > :zero",
-                    ExpressionAttributeNames={"#f": field},
-                    ExpressionAttributeValues={":minus": -1, ":zero": 0},
-                )
-            except ClientError as error:
-                if (
-                    error.response.get("Error", {}).get("Code")
-                    != "ConditionalCheckFailedException"
-                ):
-                    raise
+        started = datetime.fromisoformat(created_at).timestamp()
+        give_back = [("COUNTER", "RUNNING", "count")]
+        if end_reason == "failed":
+            give_back += [
+                (f"CODE#{code}", "META", "games_used"),
+                (f"CODE#{code}", f"DAY#{kyiv_day(started)}", "count"),
+                ("COUNTER", f"MONTH#{month(started)}", "games"),
+            ]
+        # One by one: a counter that cleanup already reset must not go below 0.
+        for pk, sk, field in give_back:
+            self.decrement(pk, sk, field)
         return True
 
+    def decrement(self, pk: str, sk: str, field: str) -> None:
+        from botocore.exceptions import ClientError
+
+        try:
+            self.table.update_item(
+                Key={"pk": pk, "sk": sk},
+                UpdateExpression="ADD #f :minus",
+                ConditionExpression="#f > :zero",
+                ExpressionAttributeNames={"#f": field},
+                ExpressionAttributeValues={":minus": -1, ":zero": 0},
+            )
+        except ClientError as error:
+            if (
+                error.response.get("Error", {}).get("Code")
+                != "ConditionalCheckFailedException"
+            ):
+                raise
+
+    # ----- what cleanup looks at -------------------------------------------------------
+    def active_ids(self) -> list[str]:
+        reply = self.table.query(
+            KeyConditionExpression="pk = :active",
+            ExpressionAttributeValues={":active": "ACTIVE"},
+            ConsistentRead=True,
+        )
+        return [item["sk"].removeprefix("GAME#") for item in reply.get("Items", [])]
+
+    def running(self) -> int:
+        return int(
+            (self._get("COUNTER", "RUNNING", consistent=True) or {}).get("count", 0)
+        )
+
+    def fix_running(self, seen: int, actual: int) -> bool:
+        """Set RUNNING to the number of active games, unless a start changed it meanwhile."""
+        from botocore.exceptions import ClientError
+
+        try:
+            self.table.update_item(
+                Key={"pk": "COUNTER", "sk": "RUNNING"},
+                UpdateExpression="SET #count = :actual",
+                ConditionExpression="attribute_not_exists(#count) OR #count = :seen",
+                ExpressionAttributeNames={"#count": "count"},
+                ExpressionAttributeValues={":actual": actual, ":seen": seen},
+            )
+            return True
+        except ClientError as error:
+            if (
+                error.response.get("Error", {}).get("Code")
+                == "ConditionalCheckFailedException"
+            ):
+                return False
+            raise
+
     # ----- events -----------------------------------------------------------------------
-    def event(self, game_id: str, type_: str, data: dict) -> None:
+    def event(self, game_id: str, type_: str, data: dict, by: str = "api") -> None:
         now = self.clock()
-        seq = API_SEQ[type_]
+        seq = (API_SEQ if by == "api" else CLEANUP_SEQ)[type_]
         self.table.put_item(
             Item={
                 "pk": f"GAME#{game_id}",
-                "sk": f"EV#api#{seq:06d}",
+                "sk": f"EV#{by}#{seq:06d}",
                 "seq": seq,
                 "at": iso_ms(now),
                 "t": None,
-                "by": "api",
+                "by": by,
                 "type": type_,
                 "data": json.loads(json.dumps(data), parse_float=Decimal),
                 "expires_at": int(now) + GAME_TTL_S,
