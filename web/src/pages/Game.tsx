@@ -67,7 +67,7 @@ function Boot({ status, lab }: { status: GameStatus | null; lab: LabCard | null 
   ];
   return (
     <Page>
-      <div className="grid gap-12 py-16 md:grid-cols-[1.3fr_1fr]">
+      <div className="grid gap-12 py-16 md:grid-cols-[1.3fr_1fr]" translate="no">
         <div>
           <Eyebrow>Handover note</Eyebrow>
           <h1 className="mt-2 font-display text-3xl font-black">{lab?.title ?? "Your shift is starting"}</h1>

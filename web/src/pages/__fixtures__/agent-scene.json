@@ -1,0 +1,96 @@
+{
+ "game_id": "q3V9xYk2Lm8Ta1BcD4eF0g",
+ "lab": {
+  "id": "dev-lab",
+  "version": 1,
+  "title": "Tuesday afternoon errors",
+  "level": "intern"
+ },
+ "terminal": false,
+ "time_limit_s": 2400,
+ "scene": {
+  "starts_at": "14:20",
+  "weekday": "Tuesday"
+ },
+ "services": [
+  {
+   "name": "storefront",
+   "kind": "app",
+   "calls": [
+    "catalog"
+   ],
+   "map": {
+    "x": 20,
+    "y": 50
+   }
+  },
+  {
+   "name": "catalog",
+   "kind": "app",
+   "calls": [],
+   "map": {
+    "x": 70,
+    "y": 50
+   }
+  }
+ ],
+ "dashboards": [
+  {
+   "uid": "shop-overview",
+   "title": "Shop overview",
+   "path": "grafana/d/shop-overview?kiosk&theme=dark"
+  }
+ ],
+ "actions": [
+  {
+   "id": "show-catalog-config",
+   "verb": "show_config",
+   "target": "catalog",
+   "label": "Show config"
+  },
+  {
+   "id": "catalog-flags",
+   "verb": "set_flag",
+   "target": "catalog",
+   "label": "Toggle flag",
+   "input": {
+    "flag": {
+     "choices": [
+      "SEARCH_V2"
+     ]
+    },
+    "value": {
+     "choices": [
+      "true",
+      "false"
+     ]
+    }
+   }
+  },
+  {
+   "id": "restart-catalog",
+   "verb": "restart",
+   "target": "catalog",
+   "label": "Restart"
+  },
+  {
+   "id": "restart-storefront",
+   "verb": "restart",
+   "target": "storefront",
+   "label": "Restart"
+  }
+ ],
+ "hints_total": 2,
+ "characters": [
+  {
+   "id": "dana",
+   "name": "Dana",
+   "role": "Product"
+  },
+  {
+   "id": "sam",
+   "name": "Sam",
+   "role": "Support"
+  }
+ ]
+}

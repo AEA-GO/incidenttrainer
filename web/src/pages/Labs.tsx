@@ -23,7 +23,7 @@ export function Labs() {
     <Page>
       <div className="py-16">
         <Eyebrow>Course</Eyebrow>
-        {problem && <Notice tone="bad">{problem}</Notice>}
+        {problem && <div className="mt-4"><Notice tone="bad">{problem}</Notice></div>}
         {course && (
           <>
             <h1 className="mt-2 font-display text-4xl font-black">{course.title}</h1>
@@ -34,14 +34,16 @@ export function Labs() {
                 {course.invite.games_left_today} today
               </p>
             ) : (
-              <Notice>
-                You need an invite code to play. <Link to="/" className="underline">Enter it here</Link>.
-              </Notice>
+              <div className="mt-6">
+                <Notice>
+                  You need an invite code to play. <Link to="/" className="underline">Enter it here</Link>.
+                </Notice>
+              </div>
             )}
             <ol className="mt-10 divide-y divide-line border-y border-line">
               {course.labs.map((lab) => (
                 <li key={lab.id}>
-                  <Link to={`/labs/${lab.id}`} className="grid gap-2 py-6 hover:bg-panel md:grid-cols-[4rem_1fr_auto] md:items-center">
+                  <Link to={`/labs/${lab.id}`} className="grid gap-2 rounded px-4 py-6 hover:bg-panel md:grid-cols-[4rem_1fr_auto] md:items-center">
                     <span className="font-mono text-2xl text-faint">{String(lab.order).padStart(2, "0")}</span>
                     <span>
                       <span className="block font-display text-xl font-black">{lab.title}</span>
