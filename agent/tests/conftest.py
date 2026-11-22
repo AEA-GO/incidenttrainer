@@ -130,7 +130,14 @@ def agent(
     http: FakeHttp,
 ) -> Agent:
     return Agent(
-        world=world, runner=runner, prometheus=prometheus, clock=clock, http=http
+        world=world,
+        runner=runner,
+        prometheus=prometheus,
+        clock=clock,
+        http=http,
+        grafana_per_game=False,  # tested on its own in test_grafana.py
+        grafana_in_background=False,
+        sleep=lambda _s: None,
     )
 
 
