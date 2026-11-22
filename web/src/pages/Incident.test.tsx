@@ -11,7 +11,8 @@ let answers: Json[] = [];
 
 beforeEach(() => {
   vi.useFakeTimers();
-  Element.prototype.scrollIntoView = vi.fn(); // jsdom has no layout
+  // Like Chrome/Edge 150+: scrollIntoView() returns a Promise (jsdom has no layout at all).
+  Element.prototype.scrollIntoView = vi.fn(() => Promise.resolve()) as unknown as Element["scrollIntoView"];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
@@ -69,5 +70,18 @@ describe("incident screen with real agent states", () => {
     render(<Incident gameId="Zo6nEXJRVS0qCy4VkP7JIQ" onEnded={onEnded} />);
     await poll(4);
     expect(onEnded).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat messages arriving one after another", () => {
+  it("doesn't crash when a new message arrives (the 22 Nov 'l is not a function')", async () => {
+    const items = state.feed.items;
+    const first = { ...state, feed: { cursor: 1, items: items.slice(0, 1) } };
+    const second = { ...state, feed: { cursor: 2, items: items.slice(1, 2) } };
+    const third = { ...state, feed: { cursor: 3, items: items.slice(2, 4) } };
+    answers = [first, second, third, { ...state, feed: { cursor: 3, items: [] } }];
+    render(<Incident gameId="Zo6nEXJRVS0qCy4VkP7JIQ" onEnded={vi.fn()} />);
+    await poll(5);
+    expect(screen.getByText(/Hint 1 ·/)).toBeTruthy();
   });
 });

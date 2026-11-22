@@ -340,7 +340,12 @@ function Chat({ items, answered, onReply }: {
 }) {
   const end = useRef<HTMLDivElement>(null);
   const shown = items.filter((i) => i.kind !== "action_result");
-  useEffect(() => end.current?.scrollIntoView({ block: "nearest" }), [shown.length]);
+  // A block body on purpose: Chrome and Edge 150+ return a Promise from scrollIntoView(),
+  // and an effect that returns anything is called later as its cleanup: that crashed the
+  // screen on the next chat message ("l is not a function", 22 Nov).
+  useEffect(() => {
+    void end.current?.scrollIntoView({ block: "nearest" });
+  }, [shown.length]);
   return (
     <section className="flex min-h-0 flex-1 flex-col rounded border border-line">
       <div className="border-b border-line px-3 py-2"><Eyebrow>#inc-checkout</Eyebrow></div>
