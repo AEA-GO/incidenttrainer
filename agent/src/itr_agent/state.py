@@ -25,6 +25,7 @@ from typing import Literal
 from itr_agent.actions import change_text, check_input, label
 from itr_agent.chat import Chat
 from itr_agent.checks import Checker, http_status
+from itr_agent.comms import CommsMixin
 from itr_agent.errors import AgentError
 from itr_agent.events import EventLog
 from itr_agent.feed import Feed
@@ -45,7 +46,7 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
-class Agent(OutcomeMixin):
+class Agent(OutcomeMixin, CommsMixin):
     world: World
     runner: CommandRunner
     prometheus: PrometheusLike
@@ -81,6 +82,11 @@ class Agent(OutcomeMixin):
     failed_checkouts: int = 0
     # Dana and Sam; created with the runbook
     chat: Chat | None = None
+    # Status page and hints (comms.py)
+    page_state: str = "investigating"
+    last_update_t: int | None = None
+    next_update_at: str | None = None
+    hints_used: int = 0
     # Resolve
     resolve_attempts: int = 0
     wrong_resolves: int = 0
@@ -97,6 +103,7 @@ class Agent(OutcomeMixin):
     _idempotent: dict = field(default_factory=dict, repr=False)
     _resolve_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _last_resolve_at: float | None = field(default=None, repr=False)
+    _last_status_at: float | None = field(default=None, repr=False)
     _watch_started_at: float | None = field(default=None, repr=False)
     _next_watch_at: float = field(default=0.0, repr=False)
     _ending: bool = field(default=False, repr=False)

@@ -33,6 +33,17 @@ class ChatReplyRequest(BaseModel):
     option_id: str = Field(pattern=r"^[a-z]$")
 
 
+class StatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    affected: str = Field(max_length=500)
+    doing: str = Field(max_length=500)
+    next_update_at: str | None = Field(
+        default=None, pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
+    )
+    page_state: Literal["investigating", "identified", "monitoring", "resolved"]
+
+
 def build_player_app(agent: Agent) -> FastAPI:
     app = FastAPI(
         title="itr-agent player", docs_url=None, redoc_url=None, openapi_url=None
@@ -72,6 +83,18 @@ def build_player_app(agent: Agent) -> FastAPI:
         """Answer Dana or Sam. The character's reaction arrives in the feed."""
         agent.reply(body.message_id, body.option_id)
         return Response(status_code=204)
+
+    @app.post("/v1/status-updates", dependencies=guards)
+    def status_update(body: StatusUpdateRequest) -> dict:
+        """Post a status update and set the status page (Dana and Sam read it)."""
+        return agent.post_status(
+            body.affected, body.doing, body.next_update_at, body.page_state
+        )
+
+    @app.post("/v1/hints", dependencies=guards)
+    def hint() -> dict:
+        """Open the next hint (costs 3 points at the end)."""
+        return agent.open_hint()
 
     @app.post("/v1/resolve", dependencies=guards)
     def resolve() -> dict:

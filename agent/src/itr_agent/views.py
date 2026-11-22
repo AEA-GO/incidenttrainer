@@ -113,14 +113,14 @@ def state_view(agent: Agent, feed_after: int = 0) -> dict:
             "watch_ends_in_s": agent.watch_ends_in(),
         },
         "hints": {
-            "used": 0,
-            "total": len(runbook.get("hints", [])),
-            "next_available_in_s": None,
+            "used": agent.hints_used,
+            "total": agent.hints_total(),
+            "next_available_in_s": agent.next_hint_in(),
         },
         "status_page": {
-            "state": "investigating",
-            "last_update_t": None,
-            "next_update_at": None,
+            "state": agent.page_state,
+            "last_update_t": agent.last_update_t,
+            "next_update_at": agent.next_update_at,
         },
         # Chat messages (with reply buttons until answered), your replies,
         # button results and notices, in order.
