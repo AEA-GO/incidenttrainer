@@ -562,3 +562,11 @@ class GameStore:
                 "expires_at": int(now) + GAME_TTL_S,
             }
         )
+
+    def code_games(self, code: str) -> list[dict]:
+        """The code's games, oldest first (labs page: which labs are done)."""
+        reply = self.table.query(
+            KeyConditionExpression="pk = :pk AND begins_with(sk, :game)",
+            ExpressionAttributeValues={":pk": f"CODE#{code}", ":game": "GAME#"},
+        )
+        return [plain(item) for item in reply.get("Items", [])]

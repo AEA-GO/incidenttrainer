@@ -58,6 +58,17 @@ def course_labs(data) -> list[str]:
     return [str(lab) for lab in labs]
 
 
+def course_doc(course_id: str, data) -> dict:
+    """The course file as {id, title, summary, labs} (a bare list gets the id as title)."""
+    info = data if isinstance(data, dict) else {}
+    return {
+        "id": course_id,
+        "title": str(info.get("title", course_id)),
+        "summary": str(info.get("summary", "")),
+        "labs": course_labs(data),
+    }
+
+
 def lab_view(card: LabCard) -> dict:
     """The public LabCard of contract 3 (never anything from the runbook or debrief)."""
     c = card.card
@@ -80,6 +91,7 @@ class Labs(Protocol):
     def card_at(self, lab_id: str, version: int) -> LabCard | None: ...
     def debrief(self, lab_id: str, version: int) -> dict | None: ...
     def course(self, course_id: str) -> list[str] | None: ...
+    def course_info(self, course_id: str) -> dict | None: ...
 
 
 class S3Labs:
@@ -148,10 +160,16 @@ class S3Labs:
         )
 
     def course(self, course_id: str) -> list[str] | None:
+        info = self.course_info(course_id)
+        return info["labs"] if info else None
+
+    def course_info(self, course_id: str) -> dict | None:
         if not LAB_ID.match(course_id):
             return None
         return self._cached(
-            f"course/{course_id}.json", CACHE_S, lambda b: course_labs(json.loads(b))
+            f"course/{course_id}.json",
+            CACHE_S,
+            lambda b: course_doc(course_id, json.loads(b)),
         )
 
 
@@ -166,7 +184,7 @@ class DictLabs:
     ):
         self.cards = {card.id: card for card in cards}
         self.debriefs = debriefs or {}  # (lab_id, version) -> debrief
-        self.courses = courses or {}  # course_id -> [lab ids]
+        self.courses = courses or {}  # course_id -> [lab ids] or {title, summary, labs}
 
     def card(self, lab_id: str) -> LabCard | None:
         return self.cards.get(lab_id)
@@ -179,4 +197,9 @@ class DictLabs:
         return self.debriefs.get((lab_id, version))
 
     def course(self, course_id: str) -> list[str] | None:
-        return self.courses.get(course_id)
+        info = self.course_info(course_id)
+        return info["labs"] if info else None
+
+    def course_info(self, course_id: str) -> dict | None:
+        data = self.courses.get(course_id)
+        return None if data is None else course_doc(course_id, data)
