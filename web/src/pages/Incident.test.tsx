@@ -85,3 +85,11 @@ describe("chat messages arriving one after another", () => {
     expect(screen.getByText(/Hint 1 ·/)).toBeTruthy();
   });
 });
+
+describe("next update quick buttons", () => {
+  it("adds minutes on the in-world clock, across midnight", async () => {
+    const { addMinutes } = await import("./Incident");
+    expect(addMinutes("03:22", 10)).toBe("03:32");
+    expect(addMinutes("23:55", 15)).toBe("00:10");
+  });
+});

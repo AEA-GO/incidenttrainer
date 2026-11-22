@@ -43,6 +43,20 @@ def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
+def empty_fields_reason(updates: list[dict]) -> str:
+    """Name what was missing, e.g. "Missing in status updates: next update time (3 of 3)."."""
+    missing = {"who is affected": 0, "what you're doing": 0, "next update time": 0}
+    for update in updates:
+        data = update.get("data") or {}
+        missing["who is affected"] += not str(data.get("affected") or "").strip()
+        missing["what you're doing"] += not str(data.get("doing") or "").strip()
+        missing["next update time"] += data.get("next_update_t") is None
+    parts = [f"{name} ({n} of {len(updates)})" for name, n in missing.items() if n]
+    if not parts:
+        return "Some status updates left fields empty."
+    return "Missing in status updates: " + ", ".join(parts) + "."
+
+
 def _order(events: list[dict]) -> list[dict]:
     """Diary order (events.md): by `at`, then `by`, then `seq`."""
     return sorted(
@@ -206,9 +220,7 @@ def score(scoring: dict, events: list[dict]) -> dict:
         )
         full = [u for u in updates if (u.get("data") or {}).get("fields_filled") == 4]
         got["comm.fields"] = len(full) / len(updates)
-        reasons["comm.fields"] = (
-            f"{len(updates) - len(full)} of {len(updates)} updates left fields empty."
-        )
+        reasons["comm.fields"] = empty_fields_reason(updates)
         kept, due, broken = 0, 0, ""
         for index, update in enumerate(updates):
             promised = (update.get("data") or {}).get("next_update_t")
