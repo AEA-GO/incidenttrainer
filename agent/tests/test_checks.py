@@ -63,6 +63,18 @@ def test_config_equals(world, runner, prometheus, http):
     assert not c.run(check("config_equals", params)).passed
 
 
+def test_config_equals_one_of_a_list(world, runner, prometheus, http):
+    """Lab 1's cause check: any log level but debug stops the flood."""
+    c = checker(world, runner, prometheus, http)
+    params = {"service": "catalog", "key": "SEARCH_V2", "value": ["false", "off"]}
+    assert c.run(check("config_equals", params)).passed
+    world.config_file("catalog").write_text("SEARCH_V2=off\n")
+    assert c.run(check("config_equals", params)).passed
+    world.config_file("catalog").write_text("SEARCH_V2=true\n")
+    result = c.run(check("config_equals", params))
+    assert not result.passed
+
+
 def test_metric_compares(world, runner, prometheus, http):
     c = checker(world, runner, prometheus, http)
     prometheus.failed = 5.0

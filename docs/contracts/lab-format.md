@@ -212,7 +212,7 @@ Read-only verbs exist so Intern labs can see config without a terminal. They are
 | `error_rate_below` | `service`, `route` (optional), `max_percent`, `window_s` | 5xx share over the window is below the threshold (world's `metrics.error_rate`) |
 | `latency_p95_below` | `service`, `route` (optional), `max_ms`, `window_s` | p95 over the window is below the threshold (world's `metrics.latency_p95`) |
 | `disk_free_percent` | `mount`, `min_percent` | free space is at least the threshold |
-| `config_equals` | `service`, `key`, `value` | the service's running config has that value |
+| `config_equals` | `service`, `key`, `value` | the service's running config has that value (`value` may be a list: any of them passes, e.g. every log level but `debug`) |
 | `container_running` | `service` | all its containers are running and healthy |
 | `no_restarts` | `service`, `window_s` | no container restarts in the window |
 | `metric` | `query` (PromQL), `op` (`lt` `le` `gt` `ge` `eq`), `value` | the query's single value compares true |
