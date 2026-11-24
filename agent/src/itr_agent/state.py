@@ -34,6 +34,7 @@ from itr_agent.observe import Observation, ServiceStatus, observe
 from itr_agent.outcome import OutcomeMixin
 from itr_agent.prometheus import Alert, PrometheusLike
 from itr_agent.runbook import validate_runbook
+from itr_agent.terminal import Terminal, TerminalSettings
 from itr_agent.verbs import CommandRunner, VerbError, Verbs
 from itr_agent.world import World
 
@@ -57,6 +58,8 @@ class Agent(OutcomeMixin, CommsMixin):
     grafana_per_game: bool = True
     grafana_in_background: bool = True
     sleep: Callable[[float], None] = time.sleep
+    # Junior labs: ttyd (terminal.py). None = no terminal on this machine.
+    terminal_settings: TerminalSettings | None = None
     # Always True for now. A later step replaces this with real checks
     # (Compose up, Prometheus answering).
     booted: bool = True
@@ -97,6 +100,7 @@ class Agent(OutcomeMixin, CommsMixin):
     _failed_baseline: float | None = field(default=None, repr=False)
     _last_health_event_t: int | None = field(default=None, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _components_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # One button at a time; the main lock is never held while a command runs.
     _action_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _recent_actions: deque = field(default_factory=deque, repr=False)
@@ -112,6 +116,20 @@ class Agent(OutcomeMixin, CommsMixin):
     def __post_init__(self) -> None:
         self.verbs = Verbs(self.world, self.runner)
         self.checker = Checker(self.world, self.runner, self.prometheus, self.http)
+        self.terminal: Terminal | None = None
+        if self.terminal_settings is not None:
+            self.terminal = Terminal(
+                self.terminal_settings, self.http, self.sleep, self._report_terminal
+            )
+
+    def _report_terminal(self, status: str) -> None:
+        self._set_component("terminal", status)
+
+    def _set_component(self, name: str, status: str) -> None:
+        # Its own small lock: the terminal reports while holding its lock, and the game
+        # lock may be waiting for that one (load_runbook), so never take the game lock here.
+        with self._components_lock:
+            self.components = {**self.components, name: status}
 
     # ----- facts -------------------------------------------------------------
 
@@ -161,8 +179,7 @@ class Agent(OutcomeMixin, CommsMixin):
 
     def _start_grafana(self, public_base_url: str, game_id: str) -> None:
         def report(status: str) -> None:
-            with self._lock:
-                self.components = {**self.components, "grafana": status}
+            self._set_component("grafana", status)
 
         grafana = GrafanaForGame(self.world, self.runner, self.http, self.sleep, report)
         if self.grafana_in_background:
@@ -210,23 +227,16 @@ class Agent(OutcomeMixin, CommsMixin):
             if problems:
                 raise AgentError(422, "invalid_runbook", "; ".join(problems[:5]))
 
-            for step in runbook.get("setup", []) + runbook["fault"]:
-                try:
-                    result = self.verbs.run_fault_step(step)
-                except VerbError as error:
-                    raise AgentError(422, "invalid_runbook", str(error)) from error
-                log.info(
-                    "fault step %s %s -> exit %s",
-                    result.verb,
-                    result.target,
-                    result.exit_code,
-                )
-                if not result.ok:
-                    raise AgentError(
-                        500,
-                        "internal",
-                        f"fault step {result.verb} {result.target} failed",
-                    )
+            self._run_steps(runbook.get("setup", []))
+            # Contract 2: setup, then the terminal (Junior labs), then the fault.
+            if runbook["level"] == "junior" and self.terminal is not None:
+                self.terminal.start()
+            try:
+                self._run_steps(runbook["fault"])
+            except AgentError:
+                if self.terminal is not None:
+                    self.terminal.stop()
+                raise
 
             self._runbook = runbook
             self.chat = Chat(
@@ -236,6 +246,23 @@ class Agent(OutcomeMixin, CommsMixin):
             self.state = "ready"
             self._fault_at = self.clock()
             self.events.add("fault_started")
+
+    def _run_steps(self, steps: list[dict]) -> None:
+        for step in steps:
+            try:
+                result = self.verbs.run_fault_step(step)
+            except VerbError as error:
+                raise AgentError(422, "invalid_runbook", str(error)) from error
+            log.info(
+                "fault step %s %s -> exit %s",
+                result.verb,
+                result.target,
+                result.exit_code,
+            )
+            if not result.ok:
+                raise AgentError(
+                    500, "internal", f"fault step {result.verb} {result.target} failed"
+                )
 
     # ----- player: acknowledge ------------------------------------------------
 
@@ -369,6 +396,8 @@ class Agent(OutcomeMixin, CommsMixin):
             time_up = t is not None and t >= self.time_limit_s
             watching = self.state == "watching"
             watch_due = watching and self.clock() >= self._next_watch_at
+        if self.terminal is not None:
+            self.terminal.keep_alive()
         if time_up:
             self.finish("unresolved", [("time_limit", {"watch_cut_short": watching})])
         elif watch_due:

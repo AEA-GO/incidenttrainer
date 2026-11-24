@@ -64,6 +64,7 @@ export type AgentState = {
 
 // Dashboard paths are relative to the game path, e.g. "grafana/d/shop-overview?kiosk&theme=dark".
 export type Scene = {
+  terminal: boolean;
   dashboards: { uid: string; title: string; path: string }[];
   actions: ActionButton[];
   scene: { starts_at?: string; weekday?: string };

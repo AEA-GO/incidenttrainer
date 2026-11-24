@@ -241,3 +241,5 @@ class OutcomeMixin:
             self.end_reason = reason
             self.feed.add("notice", t, level="info", text=END_NOTICES[reason])
             log.info("game ended: %s", reason)
+        if self.terminal is not None:
+            self.terminal.stop()  # closes every open terminal
