@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Button, Eyebrow } from "../components/Layout";
 import { ApiError, clock } from "../lib/api";
 import {
@@ -12,6 +12,9 @@ import {
   game,
 } from "../lib/game";
 import { useTicking } from "../lib/useTicking";
+
+// Only Junior labs download the terminal (xterm.js is the biggest part of the site).
+const Terminal = lazy(() => import("../components/Terminal"));
 
 const POLL_MS = 2000;
 const NAMES: Record<string, string> = { dana: "Dana", sam: "Sam", you: "You" };
@@ -156,7 +159,7 @@ export function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => v
       <main className="grid flex-1 gap-5 p-5 lg:grid-cols-[15rem_1fr_22rem]">
         <Situation s={s} />
         <section className="flex min-w-0 flex-col gap-5">
-          <Dashboards gameId={gameId} path={scene?.dashboards[0]?.path ?? ""} />
+          <Workbench gameId={gameId} scene={scene} paged={paged} ended={s.state === "ended"} />
           <Act gameId={gameId} buttons={scene?.actions ?? []} disabled={!paged} />
         </section>
         <section className="flex min-h-0 flex-col gap-5">
@@ -218,6 +221,46 @@ function Situation({ s }: { s: AgentState }) {
         </ul>
       </section>
     </aside>
+  );
+}
+
+// Dashboards, and for Junior labs a terminal next to them (tabs; both stay alive).
+function Workbench({ gameId, scene, paged, ended }: {
+  gameId: string;
+  scene: Scene | null;
+  paged: boolean;
+  ended: boolean;
+}) {
+  const [tab, setTab] = useState<"dashboards" | "terminal">("dashboards");
+  const dashboards = <Dashboards gameId={gameId} path={scene?.dashboards[0]?.path ?? ""} />;
+  if (!scene?.terminal) return dashboards;
+  const tabClass = (mine: string) =>
+    `rounded-t border border-b-0 px-3 py-1 font-mono text-xs ${
+      tab === mine ? "border-line bg-panel text-text" : "border-transparent text-faint hover:text-muted"
+    }`;
+  return (
+    <div>
+      <div className="flex gap-1" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "dashboards"} className={tabClass("dashboards")}
+          onClick={() => setTab("dashboards")}>
+          Dashboards
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "terminal"} className={tabClass("terminal")}
+          onClick={() => setTab("terminal")}>
+          Terminal
+        </button>
+      </div>
+      <div className={tab === "dashboards" ? "" : "hidden"}>{dashboards}</div>
+      <div className={tab === "terminal" ? "h-[52vh] overflow-hidden rounded border border-line" : "hidden"}>
+        {paged ? (
+          <Suspense fallback={<p className="p-6 font-mono text-sm text-faint">Terminal is loading…</p>}>
+            <Terminal gameId={gameId} active={tab === "terminal"} ended={ended} />
+          </Suspense>
+        ) : (
+          <p className="p-6 font-mono text-sm text-faint">The terminal opens when you're paged.</p>
+        )}
+      </div>
+    </div>
   );
 }
 

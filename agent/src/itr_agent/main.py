@@ -7,6 +7,7 @@ Settings come from environment variables (systemd sets them on the game server):
   ITR_WORLD_MANIFEST    default /opt/itr/world.yaml
   ITR_COMPOSE_DIR       optional; overrides the manifest's compose.dir (laptops)
   ITR_TICK_S            default 2 (how often the agent looks at Prometheus)
+  ITR_TTYD, ITR_TERMINAL_*  the terminal in Junior labs (see terminal.py)
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from itr_agent.control import build_control_app
 from itr_agent.player import build_player_app
 from itr_agent.prometheus import PrometheusClient
 from itr_agent.state import Agent
+from itr_agent.terminal import TerminalSettings
 from itr_agent.verbs import SubprocessRunner
 from itr_agent.world import load_world
 
@@ -83,6 +85,7 @@ def run() -> None:
         world=world,
         runner=SubprocessRunner(),
         prometheus=PrometheusClient(world.prometheus_url),
+        terminal_settings=TerminalSettings.from_env(os.environ, world.compose_dir),
     )
     setup_logging(agent)
     logging.getLogger(__name__).info(

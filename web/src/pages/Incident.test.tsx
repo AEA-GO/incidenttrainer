@@ -6,6 +6,12 @@ import scene from "./__fixtures__/agent-scene.json";
 import state from "./__fixtures__/agent-state.json";
 import { Incident } from "./Incident";
 
+// xterm.js needs a real browser; the panel itself is checked by hand and in lib/ttyd.test.ts.
+vi.mock("../components/Terminal", () => ({
+  default: ({ gameId }: { gameId: string }) => <div>terminal for {gameId}</div>,
+}));
+let sceneAnswer: Json = scene;
+
 type Json = Record<string, unknown>;
 let answers: Json[] = [];
 
@@ -16,7 +22,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
-      if (url.endsWith("/scene")) return new Response(JSON.stringify(scene));
+      if (url.endsWith("/scene")) return new Response(JSON.stringify(sceneAnswer));
       if (url.includes("/grafana/")) return new Response("no", { status: 404 });
       const next = answers.length > 1 ? answers.shift() : answers[0];
       return new Response(JSON.stringify(next));
@@ -24,6 +30,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  sceneAnswer = scene;
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -91,5 +98,32 @@ describe("next update quick buttons", () => {
     const { addMinutes } = await import("./Incident");
     expect(addMinutes("03:22", 10)).toBe("03:32");
     expect(addMinutes("23:55", 15)).toBe("00:10");
+  });
+
+});
+
+describe("the terminal (Junior labs)", () => {
+  it("a Junior lab gets a terminal tab next to the dashboards", async () => {
+    sceneAnswer = { ...scene, terminal: true };
+    answers = [state];
+    render(<Incident gameId="Zo6nEXJRVS0qCy4VkP7JIQ" onEnded={vi.fn()} />);
+    await poll(2);
+    expect(screen.getByRole("tab", { name: "Dashboards" })).toBeTruthy();
+    await act(async () => {
+      screen.getByRole("tab", { name: "Terminal" }).click();
+    });
+    for (let i = 0; i < 20 && !screen.queryByText(/terminal for/); i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50); // the lazy import resolves
+      });
+    }
+    expect(screen.getByText("terminal for Zo6nEXJRVS0qCy4VkP7JIQ")).toBeTruthy();
+  });
+
+  it("an Intern lab has no tabs", async () => {
+    answers = [state];
+    render(<Incident gameId="Zo6nEXJRVS0qCy4VkP7JIQ" onEnded={vi.fn()} />);
+    await poll(2);
+    expect(screen.queryByRole("tab")).toBeNull();
   });
 });

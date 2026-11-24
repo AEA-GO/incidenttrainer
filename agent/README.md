@@ -71,11 +71,32 @@ Watch it play itself: `python3 dev/play.py auto --watch 30` (a whole expert game
 | `feed.py` | the player's timeline (cursor-based) |
 | `clocks.py` | game time (M:SS) and in-world time (HH:MM) |
 | `errors.py` | one error shape for everything |
+| `grafana.py` | points Grafana at the game's address after claim |
+| `comms.py` | status updates, the status page and hints |
+| `terminal.py` | ttyd for Junior labs: started with the runbook, stopped at the end |
 
 `dev/labs/dev-lab.yaml` is a fictional lab for the stand-in shop; `dev-lab.push.json` is what the gateway would send for it (generated from the YAML; `itr-lab split` will generate it once the engine has it).
 
+## The terminal (Junior labs)
+
+For a runbook with `level: junior` the agent starts ttyd after setup and before the fault,
+and stops it when the game ends (that closes every open terminal; on a game server it also
+kills whatever the player left running). Each WebSocket gets its own new shell, at most 2.
+Settings, all optional:
+
+| Variable | Default | Game server |
+| --- | --- | --- |
+| `ITR_TTYD` | `ttyd` | (Ubuntu's ttyd 1.7.4) |
+| `ITR_TERMINAL_PORT` | `7681` | |
+| `ITR_TERMINAL_USER` | the agent's own user | `oncall` (passwordless sudo, in the docker group) |
+| `ITR_TERMINAL_BIND` | `lo` (only this machine) | `all` (the security group lets only the gateway in) |
+| `ITR_TERMINAL_CWD` | the world's compose folder | |
+
+On a laptop: `sudo apt install ttyd`, then play a Junior lab; the terminal is at
+`ws://127.0.0.1:7681/ws` (or through the dev gateway at `/s/<id>/term/ws`).
+
 ## Status
 
-Done: claim, runbook, fault, page, clock, Acknowledge, health bar, service map, buttons, Resolve, watch, reopen, endings, damage checks, diary (steps 1-7); chat with Dana and Sam (step 8).
+Done: claim, runbook, fault, page, clock, Acknowledge, health bar, service map, buttons, Resolve, watch, reopen, endings, damage checks, diary (steps 1-7); chat with Dana and Sam (step 8); status updates, status page and hints (step 9); Grafana per game (step 10); the terminal for Junior labs.
 
-Still to add before the beta: status updates and the status page (they feed the chat's chasing through `Chat.status_posted`), hints, starting Grafana with the game's sub-path at claim, real boot checks for `ready`, the terminal (ttyd) for Junior labs, `view` events.
+Still to add: real boot checks for `ready`, `view` events.
