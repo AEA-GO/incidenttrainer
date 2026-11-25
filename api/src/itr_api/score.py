@@ -194,6 +194,14 @@ def score(scoring: dict, events: list[dict]) -> dict:
     )
     reasons = {"comm.ack": ack_reason}
     if not updates:
+        # One line per rule, each saying what that rule wanted (not 5x the same line).
+        reasons |= {
+            "comm.first_update": f"No status update was posted. The first is due within {mss(FIRST_UPDATE_S)} of acknowledging.",
+            "comm.cadence": f"No regular updates: post one at least every {mss(CADENCE_S)}.",
+            "comm.fields": "No update said who is affected, what you're doing and when the next update comes.",
+            "comm.promises": "No next update time was promised, so none was kept.",
+            "comm.truthful": "The status page was never set.",
+        }
         for rule in (
             "comm.first_update",
             "comm.cadence",
@@ -202,7 +210,6 @@ def score(scoring: dict, events: list[dict]) -> dict:
             "comm.truthful",
         ):
             got[rule] = 0.0
-            reasons[rule] = "No status update was posted."
     else:
         first_gap = updates[0]["t"] - (ack_t if ack_t is not None else 0)
         got["comm.first_update"] = (

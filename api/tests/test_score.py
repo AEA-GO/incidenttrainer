@@ -385,3 +385,11 @@ def test_empty_fields_reason_names_the_missing_field():
         line["reason"]
         == "Missing in status updates: who is affected (1 of 2), next update time (2 of 2)."
     )
+
+
+def test_no_status_update_explains_each_rule_once():
+    result = score(SCORING, base(ev(0, 290, "resolve_passed")))
+    comm = [line for line in result["lost"] if line["rule"].startswith("comm.")]
+    reasons = [line["reason"] for line in comm]
+    assert len(reasons) == len(set(reasons)) >= 5
+    assert any("within 5:00" in r for r in reasons)

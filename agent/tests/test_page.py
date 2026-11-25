@@ -71,7 +71,7 @@ def test_fallback_pages_when_the_alert_is_late(
 def test_fallback_without_any_value(started, agent, clock):
     clock.advance(90)
     agent.tick()
-    assert agent.page_title == "Checkout error rate ?%"
+    assert agent.page_title == "Checkout error rate high"  # no value: no "?%"
 
 
 def test_page_happens_once(started, agent, control, prometheus, clock):
@@ -145,3 +145,12 @@ def test_prometheus_down_keeps_last_health(started, agent, prometheus, clock):
 def test_tick_before_the_runbook_does_nothing(agent):
     agent.tick()
     assert agent.state == "booting"
+
+
+def test_page_title_without_a_value():
+    from itr_agent.state import page_title
+
+    assert (
+        page_title("Checkout error rate {value}%", None) == "Checkout error rate high"
+    )
+    assert page_title("Checkout error rate {value}%", 33.4) == "Checkout error rate 33%"
