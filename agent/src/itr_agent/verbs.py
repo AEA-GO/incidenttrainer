@@ -117,6 +117,18 @@ def write_env_value(path: Path, key: str, value: str) -> None:
     if not replaced:
         lines.append(f"{key}={value}")
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    # mkstemp makes the file 0600 for whoever runs the agent (root on a game server),
+    # which locked the player's `docker compose` out of .env. Keep the old file's mode and
+    # owner; a new file gets 0644.
+    try:
+        old = os.stat(path)
+        os.fchmod(fd, old.st_mode & 0o7777)
+        try:
+            os.fchown(fd, old.st_uid, old.st_gid)
+        except PermissionError:
+            pass  # not root (a laptop): the file is ours anyway
+    except FileNotFoundError:
+        os.fchmod(fd, 0o644)
     with os.fdopen(fd, "w") as handle:
         handle.write("\n".join(lines) + "\n")
     os.replace(tmp, path)

@@ -60,3 +60,16 @@ def test_long_output_is_truncated(world, runner):
     result = Verbs(world, Noisy()).set_flag("catalog", "SEARCH_V2", "false")
     assert result.truncated is True
     assert len(result.output) == 4000
+
+
+def test_write_env_value_keeps_the_file_readable(tmp_path):
+    # The player's `docker compose` (user oncall) must still read .env after the agent
+    # (root) rewrites it at claim or for a button.
+    env = tmp_path / ".env"
+    env.write_text("A=1\n")
+    env.chmod(0o644)
+    write_env_value(env, "A", "2")
+    assert env.stat().st_mode & 0o777 == 0o644
+    new = tmp_path / "new.env"
+    write_env_value(new, "B", "1")
+    assert new.stat().st_mode & 0o777 == 0o644

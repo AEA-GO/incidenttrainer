@@ -15,6 +15,7 @@ Resolve, the watch and the endings live in outcome.py; Dana and Sam in chat.py.
 
 import hmac
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -44,6 +45,15 @@ ACTIONS_PER_MINUTE = 30
 IDEMPOTENCY_TTL_S = 600
 PLAYING = ("ready", "paged", "investigating", "watching")
 log = logging.getLogger(__name__)
+
+
+def page_title(title: str, value: float | None) -> str:
+    """Fill the alert's value into the page title. A fallback page can come before the
+    alert even goes pending, with no value: "Checkout error rate {value}%" then reads
+    "Checkout error rate high" (the value and the unit glued to it are replaced)."""
+    if value is None:
+        return re.sub(r"\s*\{value\}\S*", " high", title).strip()
+    return title.replace("{value}", str(round(value)))
 
 
 @dataclass
@@ -416,8 +426,7 @@ class Agent(OutcomeMixin, CommsMixin):
 
     def _page(self, source: str, value: float | None, seen: Observation) -> None:
         page = self.runbook["page"]
-        shown = "?" if value is None else str(round(value))
-        self.page_title = page["title"].replace("{value}", shown)
+        self.page_title = page_title(page["title"], value)
         self._paged_at = self.clock()
         self._failed_baseline = seen.failed_checkouts_total or 0.0
         self.state = "paged"
