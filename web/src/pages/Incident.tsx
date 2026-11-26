@@ -35,6 +35,7 @@ export function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => v
   const [answered, setAnswered] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [quitting, setQuitting] = useState(false);
   const cursor = useRef(0);
   const ended = useRef(false);
 
@@ -134,12 +135,25 @@ export function Incident({ gameId, onEnded }: { gameId: string; onEnded: () => v
             {hintsLeft === 0 ? "No hints left" : (hintWait ?? 0) > 0 ? `Hint in ${clock(hintWait ?? 0)}` : `Hint (−3) · ${hintsLeft} left`}
           </Button>
         )}
-        <Button kind="plain" disabled={busy}
-          onClick={() => {
-            if (window.confirm("Give up this incident? The game ends and gets scored.")) act(() => game.giveUp(gameId));
-          }}>
-          Give up
-        </Button>
+        {/* Asked on the page, not with window.confirm: some browsers (in-app panes, some
+            privacy settings) never show those dialogs, so the button silently did nothing. */}
+        {quitting ? (
+          <span className="flex items-center gap-2 rounded border border-line px-3 py-1.5 text-sm">
+            <span className="text-muted">End the game? It's scored as given up.</span>
+            <Button kind="plain" className="px-3! py-1.5!" disabled={busy}
+              onClick={() => {
+                setQuitting(false);
+                act(() => game.giveUp(gameId));
+              }}>
+              Yes, give up
+            </Button>
+            <Button kind="plain" className="px-3! py-1.5!" onClick={() => setQuitting(false)}>Keep going</Button>
+          </span>
+        ) : (
+          <Button kind="plain" disabled={busy} onClick={() => setQuitting(true)}>
+            Give up
+          </Button>
+        )}
         <Button disabled={busy || !acked || s.state === "watching"}
           onClick={() =>
             act(() => game.resolve(gameId), (r) => {
@@ -301,8 +315,15 @@ function Act({ gameId, buttons, disabled }: { gameId: string; buttons: ActionBut
   const [running, setRunning] = useState("");
   const [problem, setProblem] = useState("");
 
-  async function run(button: ActionButton, input: Record<string, string>) {
-    if (button.confirm && !window.confirm(button.confirm)) return;
+  // Risky buttons ask first, on the page (window.confirm is silently skipped by some browsers).
+  const [asking, setAsking] = useState<{ button: ActionButton; input: Record<string, string> } | null>(null);
+
+  async function run(button: ActionButton, input: Record<string, string>, confirmed = false) {
+    if (button.confirm && !confirmed) {
+      setAsking({ button, input });
+      return;
+    }
+    setAsking(null);
     setRunning(button.id);
     setProblem("");
     try {
@@ -335,6 +356,16 @@ function Act({ gameId, buttons, disabled }: { gameId: string; buttons: ActionBut
           </button>
         ))}
       </div>
+      {asking && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded border border-accent bg-panel p-3 text-sm" role="alertdialog">
+          <span className="text-text">{asking.button.confirm}</span>
+          <Button className="px-3! py-1.5!" disabled={Boolean(running)}
+            onClick={() => run(asking.button, asking.input, true)}>
+            Run it
+          </Button>
+          <Button kind="plain" className="px-3! py-1.5!" onClick={() => setAsking(null)}>Cancel</Button>
+        </div>
+      )}
       {open && (
         <form className="mt-3 flex flex-wrap items-end gap-2 rounded border border-line bg-panel p-3"
           onSubmit={(e) => {
