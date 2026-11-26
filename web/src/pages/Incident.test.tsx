@@ -127,3 +127,32 @@ describe("the terminal (Junior labs)", () => {
     expect(screen.queryByRole("tab")).toBeNull();
   });
 });
+
+describe("asking before giving up (no window.confirm)", () => {
+  it("asks on the page, then sends give-up with confirm: true", async () => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm); // never used: some browsers never show it
+    answers = [state];
+    render(<Incident gameId="Zo6nEXJRVS0qCy4VkP7JIQ" onEnded={vi.fn()} />);
+    await poll(2);
+    await act(async () => {
+      screen.getByRole("button", { name: "Give up" }).click();
+    });
+    expect(screen.getByText("End the game? It's scored as given up.")).toBeTruthy();
+    await act(async () => {
+      screen.getByRole("button", { name: "Keep going" }).click();
+    });
+    expect(screen.queryByText("End the game? It's scored as given up.")).toBeNull();
+    await act(async () => {
+      screen.getByRole("button", { name: "Give up" }).click();
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "Yes, give up" }).click();
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit?][] } }).mock.calls;
+    const giveUp = calls.find(([url]) => url.endsWith("/give-up"));
+    expect(giveUp?.[1]?.body).toBe(JSON.stringify({ confirm: true }));
+    expect(confirm).not.toHaveBeenCalled();
+  });
+});
