@@ -46,7 +46,9 @@ TOKEN=$(curl -sS -m 3 -X PUT http://169.254.169.254/latest/api/token \
   -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null)
 imds() { curl -sS -f -m 3 -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/$1"; }
 blocked "server credentials (no IAM role)" imds meta-data/iam/security-credentials/
-blocked "user data (none)" imds user-data
+# EC2 answers 200 with an empty body when a server has no user data: empty is a pass.
+user_data=$(imds user-data 2>/dev/null)
+if [ -n "$user_data" ]; then bad "user data is set (${#user_data} characters)"; else ok "user data (none)"; fi
 blocked "instance tags in metadata (off)" imds meta-data/tags/instance
 blocked "metadata without a token (IMDSv1 off)" curl -sS -f -m 3 http://169.254.169.254/latest/meta-data/
 
